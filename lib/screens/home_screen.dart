@@ -50,39 +50,39 @@ class HomeScreen extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '用 Flutter 重寫的台灣公車工具',
+                      'Yet Another Bus App',
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '目前資料來源：${controller.settings.provider.label}',
-                      style: Theme.of(context).textTheme.bodyLarge,
-                    ),
-                    const SizedBox(height: 16),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [
-                        Chip(
-                          avatar: Icon(
-                            controller.databaseReady
-                                ? Icons.check_circle
-                                : Icons.download_rounded,
-                          ),
-                          label: Text(
-                            controller.databaseReady ? '資料庫已就緒' : '尚未下載資料庫',
-                          ),
-                        ),
-                        if (controller.checkingDatabase)
-                          const Chip(
-                            avatar: SizedBox.square(
-                              dimension: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                            label: Text('檢查中'),
-                          ),
-                      ],
-                    ),
+                    // const SizedBox(height: 8),
+                    // Text(
+                    //   '目前資料來源：${controller.settings.provider.label}',
+                    //   style: Theme.of(context).textTheme.bodyLarge,
+                    // ),
+                    // const SizedBox(height: 16),
+                    // Wrap(
+                    //   spacing: 12,
+                    //   runSpacing: 12,
+                    //   children: [
+                    //     Chip(
+                    //       avatar: Icon(
+                    //         controller.databaseReady
+                    //             ? Icons.check_circle
+                    //             : Icons.download_rounded,
+                    //       ),
+                    //       label: Text(
+                    //         controller.databaseReady ? '資料庫已就緒' : '尚未下載資料庫',
+                    //       ),
+                    //     ),
+                    //     if (controller.checkingDatabase)
+                    //       const Chip(
+                    //         avatar: SizedBox.square(
+                    //           dimension: 18,
+                    //           child: CircularProgressIndicator(strokeWidth: 2),
+                    //         ),
+                    //         label: Text('檢查中'),
+                    //       ),
+                    //   ],
+                    // ),
                     if (!controller.databaseReady) ...[
                       const SizedBox(height: 16),
                       Text(

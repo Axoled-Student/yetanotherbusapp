@@ -364,35 +364,35 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
             )
           : Column(
               children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                  child: Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              Chip(label: Text(widget.provider.label)),
-                              Chip(
-                                label: Text(
-                                  'routeKey ${detail.route.routeKey}',
-                                ),
-                              ),
-                            ],
-                          ),
-                          if (detail.route.description.isNotEmpty) ...[
-                            const SizedBox(height: 10),
-                            Text(detail.route.description),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
+                // Padding(
+                //   padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                //   child: Card(
+                //     child: Padding(
+                //       padding: const EdgeInsets.all(16),
+                //       child: Column(
+                //         crossAxisAlignment: CrossAxisAlignment.start,
+                //         children: [
+                //           Wrap(
+                //             spacing: 8,
+                //             runSpacing: 8,
+                //             children: [
+                //               Chip(label: Text(widget.provider.label)),
+                //               Chip(
+                //                 label: Text(
+                //                   'routeKey ${detail.route.routeKey}',
+                //                 ),
+                //               ),
+                //             ],
+                //           ),
+                //           if (detail.route.description.isNotEmpty) ...[
+                //             const SizedBox(height: 10),
+                //             Text(detail.route.description),
+                //           ],
+                //         ],
+                //       ),
+                //     ),
+                //   ),
+                // ),
                 if (_tabController != null)
                   TabBar(
                     controller: _tabController,

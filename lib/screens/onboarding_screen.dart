@@ -186,11 +186,6 @@ class _IntroStep extends StatelessWidget {
         ),
         const SizedBox(height: 24),
         Text('歡迎來到 YABus', style: Theme.of(context).textTheme.headlineMedium),
-        const SizedBox(height: 12),
-        Text(
-          '這一版已經把你 Flet app 的核心流程搬進 Flutter：搜尋路線、即時站牌、最愛群組和附近站牌。',
-          style: Theme.of(context).textTheme.bodyLarge,
-        ),
         const SizedBox(height: 24),
         const _OnboardingFeature(
           icon: Icons.search_rounded,
