@@ -1,0 +1,26 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:yetanotherbusapp/core/models.dart';
+
+void main() {
+  test('eta presentation keeps seconds when enabled', () {
+    final stop = StopInfo(
+      routeKey: 1,
+      pathId: 0,
+      stopId: 10,
+      stopName: '測試站',
+      sequence: 1,
+      lon: 121.5,
+      lat: 25.0,
+      sec: 125,
+    );
+
+    final eta = buildEtaPresentation(stop, alwaysShowSeconds: true);
+
+    expect(eta.text, '2分\n5秒');
+  });
+
+  test('distance formatter switches to km over one kilometer', () {
+    expect(formatDistance(320), '320m');
+    expect(formatDistance(1530), '1.5km');
+  });
+}
