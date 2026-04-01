@@ -64,13 +64,34 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Prepare Android signing files
+        if: ${{ secrets.KEYSTORE_BASE64 != '' && secrets.KEYSTORE_ALIAS != '' && secrets.KEYSTORE_PASSWORD != '' }}
+        shell: bash
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
+          cat > android/key.properties <<EOF
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.KEYSTORE_ALIAS }}
+          storeFile=upload-keystore.jks
+          EOF
+
+      - name: Print signing mode
+        shell: bash
+        run: |
+          if [[ -f android/key.properties ]]; then
+            echo "Using configured release keystore."
+          else
+            echo "No signing secrets available; falling back to debug signing."
+          fi
+
       - name: Build APK
         run: flutter build apk --release
 
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-apk
+          name: android-apk-release
           path: build/app/outputs/flutter-apk/app-release.apk
 
   build-web:
