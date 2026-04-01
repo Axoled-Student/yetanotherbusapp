@@ -495,7 +495,7 @@ EtaPresentation buildEtaPresentation(
   final message = stop.msg?.trim() ?? '';
   if (message.isNotEmpty) {
     return EtaPresentation(
-      text: message == '即將進站' ? '即將\n進站' : message,
+      text: message == '即將進站' ? '即將\n進站' : message == '末班駛離' ? '末班\n駛離' : message,
       backgroundColor: Colors.teal.shade50,
       foregroundColor: Colors.teal.shade900,
     );
