@@ -645,7 +645,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
               const SizedBox(width: 16),
               Expanded(
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
@@ -657,13 +657,11 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
                         height: 1.2,
                       ),
                     ),
-                    const SizedBox(),
+                    const SizedBox(width: 8),
                     Expanded(
-                      child: Center(
-                        child: Container(
-                          height: 1,
-                          color: theme.colorScheme.outlineVariant,
-                        ),
+                      child: Container(
+                        height: 1,
+                        color: theme.colorScheme.outlineVariant,
                       ),
                     ),
                     if (trailingStatus != null) ...[
