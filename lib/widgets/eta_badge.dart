@@ -19,6 +19,7 @@ class EtaBadge extends StatelessWidget {
     final eta = buildEtaPresentation(
       stop,
       alwaysShowSeconds: alwaysShowSeconds,
+      brightness: Theme.of(context).brightness,
     );
     final fontSize = size * 0.24;
 

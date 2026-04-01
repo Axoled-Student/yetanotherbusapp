@@ -491,13 +491,19 @@ class EtaPresentation {
 EtaPresentation buildEtaPresentation(
   StopInfo stop, {
   required bool alwaysShowSeconds,
+  Brightness brightness = Brightness.light,
 }) {
+  final isDark = brightness == Brightness.dark;
   final message = stop.msg?.trim() ?? '';
   if (message.isNotEmpty) {
     return EtaPresentation(
-      text: message == '即將進站' ? '即將\n進站' : message == '末班駛離' ? '末班\n駛離' : message,
-      backgroundColor: Colors.teal.shade50,
-      foregroundColor: Colors.teal.shade900,
+      text: message == '即將進站'
+          ? '即將\n進站'
+          : message == '末班駛離'
+          ? '末班\n駛離'
+          : message,
+      backgroundColor: isDark ? const Color(0xFF16383D) : Colors.teal.shade50,
+      foregroundColor: isDark ? const Color(0xFFBEECEF) : Colors.teal.shade900,
     );
   }
 
@@ -532,8 +538,12 @@ EtaPresentation buildEtaPresentation(
 
   return EtaPresentation(
     text: alwaysShowSeconds ? '$minutes分\n$leftoverSeconds秒' : '$minutes分',
-    backgroundColor: urgent ? Colors.orange.shade700 : const Color(0xFFE2F4F1),
-    foregroundColor: urgent ? Colors.white : const Color(0xFF0D4E57),
+    backgroundColor: urgent
+        ? Colors.orange.shade700
+        : (isDark ? const Color(0xFF233A41) : const Color(0xFFE2F4F1)),
+    foregroundColor: urgent
+        ? Colors.white
+        : (isDark ? const Color(0xFFD7F1F3) : const Color(0xFF0D4E57)),
   );
 }
 
