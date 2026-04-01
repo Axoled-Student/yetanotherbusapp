@@ -6,11 +6,13 @@ class EtaBadge extends StatelessWidget {
   const EtaBadge({
     required this.stop,
     required this.alwaysShowSeconds,
+    this.size = 58,
     super.key,
   });
 
   final StopInfo stop;
   final bool alwaysShowSeconds;
+  final double size;
 
   @override
   Widget build(BuildContext context) {
@@ -18,14 +20,15 @@ class EtaBadge extends StatelessWidget {
       stop,
       alwaysShowSeconds: alwaysShowSeconds,
     );
+    final fontSize = eta.text.contains('\n') ? size * 0.21 : size * 0.24;
 
     return Container(
-      width: 58,
-      height: 58,
+      width: size,
+      height: size,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: eta.backgroundColor,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(size * 0.31),
       ),
       child: Text(
         eta.text,
@@ -33,7 +36,7 @@ class EtaBadge extends StatelessWidget {
         style: TextStyle(
           color: eta.foregroundColor,
           fontWeight: FontWeight.w700,
-          fontSize: eta.text.contains('\n') ? 12 : 14,
+          fontSize: fontSize,
           height: 1.1,
         ),
       ),

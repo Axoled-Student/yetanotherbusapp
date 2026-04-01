@@ -70,6 +70,12 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> updateKeepScreenAwakeOnRouteDetail(bool value) async {
+    _settings = _settings.copyWith(keepScreenAwakeOnRouteDetail: value);
+    await storage.saveSettings(_settings);
+    notifyListeners();
+  }
+
   Future<void> updateBusUpdateTime(int value) async {
     _settings = _settings.copyWith(busUpdateTime: value);
     await storage.saveSettings(_settings);

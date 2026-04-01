@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../app/bus_app.dart';
 import '../core/models.dart';
@@ -34,6 +35,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   TabController? _tabController;
   int _remainingSeconds = 0;
   bool _didScrollToInitialStop = false;
+  bool _isScrollingToInitialStop = false;
+  bool? _wakelockEnabled;
+  int? _targetInitialPathId;
   final Map<int, GlobalKey> _stopKeys = <int, GlobalKey>{};
 
   @override
@@ -45,9 +49,20 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncWakelock(
+      AppControllerScope.of(context).settings.keepScreenAwakeOnRouteDetail,
+    );
+  }
+
+  @override
   void dispose() {
     _countdownTimer?.cancel();
     _tabController?.dispose();
+    if (_wakelockEnabled == true) {
+      unawaited(_setWakelock(false));
+    }
     super.dispose();
   }
 
@@ -57,7 +72,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     setState(() {
       _isLoading = true;
       _error = null;
-      _statusMessage = '更新中...';
+      _statusMessage = '讀取中...';
     });
 
     try {
@@ -95,12 +110,12 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     if (pathIds.isEmpty) {
       _tabController?.dispose();
       _tabController = null;
+      _targetInitialPathId = null;
       return;
     }
 
-    final initialIndex = widget.initialPathId == null
-        ? 0
-        : pathIds.indexOf(widget.initialPathId!).clamp(0, pathIds.length - 1);
+    final initialIndex = _resolveInitialPathIndex(detail.paths);
+    _targetInitialPathId = detail.paths[initialIndex].pathId;
     final selectedIndex = _tabController == null
         ? initialIndex
         : _tabController!.index.clamp(0, pathIds.length - 1);
@@ -125,6 +140,25 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     });
   }
 
+  int _resolveInitialPathIndex(List<PathInfo> paths) {
+    if (widget.initialPathId == null || paths.isEmpty) {
+      return 0;
+    }
+
+    final exactMatch = paths.indexWhere(
+      (path) => path.pathId == widget.initialPathId,
+    );
+    if (exactMatch != -1) {
+      return exactMatch;
+    }
+
+    final legacyIndex = widget.initialPathId!;
+    if (legacyIndex >= 0 && legacyIndex < paths.length) {
+      return legacyIndex;
+    }
+    return 0;
+  }
+
   void _startCountdown(int seconds) {
     _countdownTimer?.cancel();
     _remainingSeconds = seconds;
@@ -146,33 +180,53 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
 
   void _scrollToInitialStopIfNeeded() {
     if (_didScrollToInitialStop ||
+        _isScrollingToInitialStop ||
         widget.initialStopId == null ||
         _detail == null) {
       return;
     }
 
     final pathId = _currentPathId;
-    if (widget.initialPathId != null && widget.initialPathId != pathId) {
+    if (pathId == null) {
+      return;
+    }
+    if (_targetInitialPathId != null && _targetInitialPathId != pathId) {
       return;
     }
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final pathId = _currentPathId;
-      if (pathId == null) {
+    unawaited(_attemptScrollToInitialStop(pathId, widget.initialStopId!));
+  }
+
+  Future<void> _attemptScrollToInitialStop(int pathId, int stopId) async {
+    _isScrollingToInitialStop = true;
+    try {
+      for (var attempt = 0; attempt < 12; attempt++) {
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted || _didScrollToInitialStop) {
+          return;
+        }
+        if (_currentPathId != pathId) {
+          return;
+        }
+
+        final key = _stopKeys[_keyForStop(pathId, stopId)];
+        final targetContext = key?.currentContext;
+        if (targetContext == null || !targetContext.mounted) {
+          continue;
+        }
+
+        await Scrollable.ensureVisible(
+          targetContext,
+          duration: const Duration(milliseconds: 360),
+          curve: Curves.easeOutCubic,
+          alignment: 0.28,
+        );
+        _didScrollToInitialStop = true;
         return;
       }
-      final key = _stopKeys[_keyForStop(pathId, widget.initialStopId!)];
-      final context = key?.currentContext;
-      if (context == null) {
-        return;
-      }
-      Scrollable.ensureVisible(
-        context,
-        duration: const Duration(milliseconds: 320),
-        alignment: 0.3,
-      );
-      _didScrollToInitialStop = true;
-    });
+    } finally {
+      _isScrollingToInitialStop = false;
+    }
   }
 
   int? get _currentPathId {
@@ -187,6 +241,29 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
 
   int _keyForStop(int pathId, int stopId) {
     return Object.hash(pathId, stopId);
+  }
+
+  void _syncWakelock(bool enable) {
+    if (_wakelockEnabled == enable) {
+      return;
+    }
+    _wakelockEnabled = enable;
+    unawaited(_setWakelock(enable));
+  }
+
+  Future<void> _setWakelock(bool enable) async {
+    try {
+      await WakelockPlus.toggle(enable: enable);
+    } catch (_) {
+      // Ignore unsupported platform or plugin errors and keep the page usable.
+    }
+  }
+
+  bool _isInitialStop(StopInfo stop) {
+    if (widget.initialStopId != stop.stopId) {
+      return false;
+    }
+    return _targetInitialPathId == null || _targetInitialPathId == stop.pathId;
   }
 
   Future<void> _handleFavorite(StopInfo stop) async {
@@ -263,7 +340,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
           content: TextField(
             controller: controller,
             autofocus: true,
-            decoration: const InputDecoration(hintText: '例如：通勤'),
+            decoration: const InputDecoration(hintText: '輸入群組名稱'),
           ),
           actions: [
             TextButton(
@@ -283,6 +360,109 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     return result;
   }
 
+  Widget _buildStopChip({required Widget label, Widget? avatar}) {
+    return Chip(
+      avatar: avatar,
+      label: label,
+      padding: EdgeInsets.zero,
+      labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  Widget _buildStopTile(
+    ThemeData theme,
+    StopInfo stop, {
+    required bool alwaysShowSeconds,
+    required bool isHighlighted,
+  }) {
+    final message = (stop.msg ?? '').trim();
+    final vehicle = stop.buses.isEmpty ? null : stop.buses.first;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(
+          color: isHighlighted
+              ? theme.colorScheme.secondary
+              : theme.colorScheme.outlineVariant,
+        ),
+      ),
+      color: isHighlighted ? theme.colorScheme.secondaryContainer : null,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            EtaBadge(
+              stop: stop,
+              alwaysShowSeconds: alwaysShowSeconds,
+              size: 50,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      stop.stopName,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        height: 1.15,
+                      ),
+                    ),
+                    if (message.isNotEmpty || vehicle != null) ...[
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          if (message.isNotEmpty)
+                            _buildStopChip(label: Text(message)),
+                          if (vehicle != null)
+                            _buildStopChip(
+                              avatar: Icon(
+                                vehicle.type == '1'
+                                    ? Icons.accessible_rounded
+                                    : Icons.directions_bus_rounded,
+                                size: 16,
+                              ),
+                              label: Text(vehicle.id),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            PopupMenuButton<_StopAction>(
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+              icon: const Icon(Icons.more_horiz_rounded, size: 20),
+              onSelected: (value) {
+                if (value == _StopAction.favorite) {
+                  _handleFavorite(stop);
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem<_StopAction>(
+                  value: _StopAction.favorite,
+                  child: Text('加入最愛'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = AppControllerScope.of(context);
@@ -297,7 +477,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(detail?.route.routeName ?? '載入中...'),
+        title: Text(detail?.route.routeName ?? '公車資訊'),
         actions: [
           IconButton(
             onPressed: _refresh,
@@ -344,8 +524,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
                 child: Text(
                   _statusMessage ??
                       (_remainingSeconds > 0
-                          ? '$_remainingSeconds 秒後重新整理'
-                          : '等待下一次更新'),
+                          ? '$_remainingSeconds 秒後自動更新'
+                          : '準備重新整理'),
                   style: theme.textTheme.bodySmall,
                 ),
               ),
@@ -359,40 +539,11 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
           ? Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),
-                child: Text(_error ?? '沒有可顯示的資料。'),
+                child: Text(_error ?? '目前無法載入公車資訊'),
               ),
             )
           : Column(
               children: [
-                // Padding(
-                //   padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                //   child: Card(
-                //     child: Padding(
-                //       padding: const EdgeInsets.all(16),
-                //       child: Column(
-                //         crossAxisAlignment: CrossAxisAlignment.start,
-                //         children: [
-                //           Wrap(
-                //             spacing: 8,
-                //             runSpacing: 8,
-                //             children: [
-                //               Chip(label: Text(widget.provider.label)),
-                //               Chip(
-                //                 label: Text(
-                //                   'routeKey ${detail.route.routeKey}',
-                //                 ),
-                //               ),
-                //             ],
-                //           ),
-                //           if (detail.route.description.isNotEmpty) ...[
-                //             const SizedBox(height: 10),
-                //             Text(detail.route.description),
-                //           ],
-                //         ],
-                //       ),
-                //     ),
-                //   ),
-                // ),
                 if (_tabController != null)
                   TabBar(
                     controller: _tabController,
@@ -403,78 +554,31 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
                   ),
                 Expanded(
                   child: _tabController == null
-                      ? const Center(child: Text('沒有方向資料。'))
+                      ? const Center(child: Text('目前沒有可顯示的方向'))
                       : TabBarView(
                           controller: _tabController,
                           children: detail.paths.map((path) {
                             final pathStops =
                                 detail.stopsByPath[path.pathId] ?? const [];
                             return ListView.separated(
-                              padding: const EdgeInsets.fromLTRB(
-                                16,
-                                12,
-                                16,
-                                24,
-                              ),
+                              padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
                               itemCount: pathStops.length,
                               separatorBuilder: (_, _) =>
-                                  const SizedBox(height: 10),
+                                  const SizedBox(height: 6),
                               itemBuilder: (context, index) {
                                 final stop = pathStops[index];
                                 final key = _stopKeys.putIfAbsent(
                                   _keyForStop(path.pathId, stop.stopId),
                                   GlobalKey.new,
                                 );
-                                return Card(
+                                return Container(
                                   key: key,
-                                  color: widget.initialStopId == stop.stopId
-                                      ? theme.colorScheme.secondaryContainer
-                                      : null,
-                                  child: ListTile(
-                                    contentPadding: const EdgeInsets.all(14),
-                                    leading: EtaBadge(
-                                      stop: stop,
-                                      alwaysShowSeconds:
-                                          controller.settings.alwaysShowSeconds,
-                                    ),
-                                    title: Text(stop.stopName),
-                                    subtitle: Padding(
-                                      padding: const EdgeInsets.only(top: 8),
-                                      child: Wrap(
-                                        spacing: 8,
-                                        runSpacing: 8,
-                                        children: [
-                                          if ((stop.msg ?? '')
-                                              .trim()
-                                              .isNotEmpty)
-                                            Chip(label: Text(stop.msg!.trim())),
-                                          if (stop.buses.isNotEmpty)
-                                            Chip(
-                                              avatar: Icon(
-                                                stop.buses.first.type == '1'
-                                                    ? Icons.accessible_rounded
-                                                    : Icons
-                                                          .directions_bus_rounded,
-                                                size: 18,
-                                              ),
-                                              label: Text(stop.buses.first.id),
-                                            ),
-                                        ],
-                                      ),
-                                    ),
-                                    trailing: PopupMenuButton<_StopAction>(
-                                      onSelected: (value) {
-                                        if (value == _StopAction.favorite) {
-                                          _handleFavorite(stop);
-                                        }
-                                      },
-                                      itemBuilder: (context) => const [
-                                        PopupMenuItem<_StopAction>(
-                                          value: _StopAction.favorite,
-                                          child: Text('加入最愛'),
-                                        ),
-                                      ],
-                                    ),
+                                  child: _buildStopTile(
+                                    theme,
+                                    stop,
+                                    alwaysShowSeconds:
+                                        controller.settings.alwaysShowSeconds,
+                                    isHighlighted: _isInitialStop(stop),
                                   ),
                                 );
                               },

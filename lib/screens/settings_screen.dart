@@ -182,6 +182,13 @@ class SettingsScreen extends StatelessWidget {
                     value: controller.settings.alwaysShowSeconds,
                     onChanged: controller.updateAlwaysShowSeconds,
                   ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('公車頁保持螢幕喚醒'),
+                    subtitle: const Text('開啟後在顯示站牌時不會自動熄屏'),
+                    value: controller.settings.keepScreenAwakeOnRouteDetail,
+                    onChanged: controller.updateKeepScreenAwakeOnRouteDetail,
+                  ),
                   const SizedBox(height: 8),
                   Text('正常更新間隔：${controller.settings.busUpdateTime} 秒'),
                   Slider(
