@@ -659,9 +659,11 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
                     ),
                     const SizedBox(),
                     Expanded(
-                      child: Container(
-                        height: 1,
-                        color: theme.colorScheme.outlineVariant,
+                      child: Center(
+                        child: Container(
+                          height: 1,
+                          color: theme.colorScheme.outlineVariant,
+                        ),
                       ),
                     ),
                     if (trailingStatus != null) ...[
