@@ -738,7 +738,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       ),
       bottomNavigationBar: BottomAppBar(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+          padding: const EdgeInsets.fromLTRB(0, 0, 0, 4),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
