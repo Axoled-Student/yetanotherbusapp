@@ -73,12 +73,12 @@ jobs:
         run: |
           if [[ -n "$KEYSTORE_BASE64" && -n "$KEYSTORE_ALIAS" && -n "$KEYSTORE_PASSWORD" ]]; then
             echo "$KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
-            cat > android/key.properties <<EOF
-            storePassword=$KEYSTORE_PASSWORD
-            keyPassword=$KEYSTORE_PASSWORD
-            keyAlias=$KEYSTORE_ALIAS
-            storeFile=upload-keystore.jks
-            EOF
+            printf '%s\n' \
+              "storePassword=$KEYSTORE_PASSWORD" \
+              "keyPassword=$KEYSTORE_PASSWORD" \
+              "keyAlias=$KEYSTORE_ALIAS" \
+              "storeFile=upload-keystore.jks" \
+              > android/key.properties
           else
             echo "Signing secrets are missing; skip generating release keystore files."
           fi
