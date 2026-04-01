@@ -657,21 +657,17 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
                         height: 1.2,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Container(
-                            height: 1,
-                            color: theme.colorScheme.outlineVariant,
-                          ),
-                        ),
-                        if (trailingStatus != null) ...[
-                          const SizedBox(width: 12),
-                          trailingStatus,
-                        ],
-                      ],
+                    // const SizedBox(height: 8),
+                    Expanded(
+                      child: Container(
+                        height: 1,
+                        color: theme.colorScheme.outlineVariant,
+                      ),
                     ),
+                    if (trailingStatus != null) ...[
+                      const SizedBox(width: 12),
+                      trailingStatus,
+                    ],
                   ],
                 ),
               ),
