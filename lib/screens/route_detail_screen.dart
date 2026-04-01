@@ -721,7 +721,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
                           title: Text(detail.route.routeName),
                           content: Text(
                             detail.route.description.isEmpty
-                                ? 'routeKey: ${detail.route.routeKey}'
+                                ? '路線 ID: ${detail.route.routeKey}'
                                 : detail.route.description,
                           ),
                           actions: [
@@ -740,19 +740,19 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       ),
       bottomNavigationBar: BottomAppBar(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(0, 0, 0, 4),
+          padding: const EdgeInsets.fromLTRB(0, 0, 0, 2),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               LinearProgressIndicator(value: progress),
-              const SizedBox(height: 8),
+              const SizedBox(height: 5),
               Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
                   _statusMessage ??
                       (_remainingSeconds > 0
-                          ? '$_remainingSeconds 秒後自動更新'
-                          : '準備重新整理'),
+                          ? '$_remainingSeconds 秒後更新'
+                          : '正在更新'),
                   style: theme.textTheme.bodySmall,
                 ),
               ),
