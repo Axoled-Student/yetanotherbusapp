@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -24,16 +25,24 @@ class BusRepository {
 
   static const _busFileBaseUrl = 'https://files.bus.yahoo.com/';
   static const _busServerBaseUrl = 'https://busserver.bus.yahoo.com/';
+  static const _webLocalDatabaseUnsupportedMessage =
+      'Web does not support the local SQLite database used by this app yet. '
+      'Use Windows or Android for database-backed features.';
 
   final http.Client _client;
 
   Future<bool> databaseExists(BusProvider provider) async {
+    if (!_supportsLocalDatabase) {
+      return false;
+    }
     final file = await _databaseFile(provider);
     return file.exists();
   }
 
   Future<Map<BusProvider, int?>> checkForUpdates() async {
-    final localVersions = await _readVersionMap();
+    final localVersions = _supportsLocalDatabase
+        ? await _readVersionMap()
+        : {for (final provider in BusProvider.values) provider.name: 0};
     final results = <BusProvider, int?>{};
 
     for (final provider in BusProvider.values) {
@@ -59,11 +68,15 @@ class BusRepository {
   }
 
   Future<int?> getLocalVersion(BusProvider provider) async {
+    if (!_supportsLocalDatabase) {
+      return null;
+    }
     final versions = await _readVersionMap();
     return versions[provider.name];
   }
 
   Future<void> downloadDatabase(BusProvider provider) async {
+    _ensureLocalDatabaseSupported();
     final response = await _client.get(
       Uri.parse(
         '$_busFileBaseUrl'
@@ -459,6 +472,7 @@ class BusRepository {
   }
 
   Future<Database> _openDatabase(BusProvider provider) async {
+    _ensureLocalDatabaseSupported();
     final file = await _databaseFile(provider);
     if (!await file.exists()) {
       throw DatabaseNotReadyException('尚未下載 ${provider.label} 資料庫。');
@@ -502,6 +516,14 @@ class BusRepository {
     final directory = await _databaseDirectory();
     final file = File(p.join(directory.path, 'version.json'));
     await file.writeAsString(jsonEncode(versions), flush: true);
+  }
+
+  bool get _supportsLocalDatabase => !kIsWeb;
+
+  void _ensureLocalDatabaseSupported() {
+    if (!_supportsLocalDatabase) {
+      throw UnsupportedError(_webLocalDatabaseUnsupportedMessage);
+    }
   }
 
   int _extractVersionFromBaseUrl(String baseUrl) {

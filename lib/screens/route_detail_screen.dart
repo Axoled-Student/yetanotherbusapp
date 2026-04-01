@@ -644,7 +644,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
               ),
               const SizedBox(width: 16),
               Expanded(
-                child: Column(
+                child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
