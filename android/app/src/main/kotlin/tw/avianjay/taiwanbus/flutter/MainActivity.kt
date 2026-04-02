@@ -1,9 +1,13 @@
 package tw.avianjay.taiwanbus.flutter
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
@@ -17,6 +21,7 @@ import java.io.File
 class MainActivity : FlutterActivity() {
     private var appLaunchChannel: MethodChannel? = null
     private var pendingLaunchPayload: Map<String, Any?>? = null
+    private var pendingNotificationPermissionResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -83,6 +88,40 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            TRIP_MONITOR_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "requestNotificationPermission" -> {
+                    requestNotificationPermission(result)
+                }
+
+                "startOrUpdateTripMonitor" -> {
+                    val session = call.argument<Map<String, Any?>>("session")
+                    if (session == null) {
+                        result.error("missing_session", "Trip monitor session is required.", null)
+                        return@setMethodCallHandler
+                    }
+                    RouteTripMonitorService.startOrUpdate(this, session)
+                    result.success(null)
+                }
+
+                "setTripMonitorAppInForeground" -> {
+                    val appInForeground = call.argument<Boolean>("appInForeground") ?: true
+                    RouteTripMonitorService.setAppInForeground(this, appInForeground)
+                    result.success(null)
+                }
+
+                "stopTripMonitor" -> {
+                    RouteTripMonitorService.stop(this)
+                    result.success(null)
+                }
+
+                else -> result.notImplemented()
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -92,6 +131,22 @@ class MainActivity : FlutterActivity() {
         val payload = AppLaunchConstants.extractLaunchPayload(intent) ?: return
         pendingLaunchPayload = payload
         appLaunchChannel?.invokeMethod("onLaunchAction", payload)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_CODE_POST_NOTIFICATIONS) {
+            return
+        }
+
+        val granted = grantResults.isNotEmpty() &&
+            grantResults[0] == PackageManager.PERMISSION_GRANTED
+        pendingNotificationPermissionResult?.success(granted)
+        pendingNotificationPermissionResult = null
     }
 
     private fun canRequestPackageInstalls(): Boolean {
@@ -184,6 +239,29 @@ class MainActivity : FlutterActivity() {
         return ShortcutManagerCompat.requestPinShortcut(this, shortcut, null)
     }
 
+    private fun requestNotificationPermission(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            result.success(true)
+            return
+        }
+        if (
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            result.success(true)
+            return
+        }
+
+        pendingNotificationPermissionResult = result
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+            REQUEST_CODE_POST_NOTIFICATIONS,
+        )
+    }
+
     companion object {
         private const val UPDATE_INSTALLER_CHANNEL =
             "tw.avianjay.taiwanbus.flutter/update_installer"
@@ -191,5 +269,8 @@ class MainActivity : FlutterActivity() {
             "tw.avianjay.taiwanbus.flutter/app_launch"
         private const val HOME_INTEGRATION_CHANNEL =
             "tw.avianjay.taiwanbus.flutter/home_integration"
+        private const val TRIP_MONITOR_CHANNEL =
+            "tw.avianjay.taiwanbus.flutter/trip_monitor"
+        private const val REQUEST_CODE_POST_NOTIFICATIONS = 901
     }
 }

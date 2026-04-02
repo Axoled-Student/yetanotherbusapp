@@ -113,6 +113,8 @@ class AppSettings {
     required this.themeMode,
     required this.alwaysShowSeconds,
     required this.keepScreenAwakeOnRouteDetail,
+    required this.enableRouteBackgroundMonitor,
+    required this.hasSeenRouteBackgroundMonitorPrompt,
     required this.favoriteWidgetAutoRefreshMinutes,
     required this.busUpdateTime,
     required this.busErrorUpdateTime,
@@ -128,6 +130,8 @@ class AppSettings {
       themeMode: ThemeMode.system,
       alwaysShowSeconds: false,
       keepScreenAwakeOnRouteDetail: true,
+      enableRouteBackgroundMonitor: false,
+      hasSeenRouteBackgroundMonitorPrompt: false,
       favoriteWidgetAutoRefreshMinutes: 0,
       busUpdateTime: 10,
       busErrorUpdateTime: 3,
@@ -152,6 +156,10 @@ class AppSettings {
       alwaysShowSeconds: json['alwaysShowSeconds'] as bool? ?? false,
       keepScreenAwakeOnRouteDetail:
           json['keepScreenAwakeOnRouteDetail'] as bool? ?? true,
+      enableRouteBackgroundMonitor:
+          json['enableRouteBackgroundMonitor'] as bool? ?? false,
+      hasSeenRouteBackgroundMonitorPrompt:
+          json['hasSeenRouteBackgroundMonitorPrompt'] as bool? ?? false,
       favoriteWidgetAutoRefreshMinutes:
           json['favoriteWidgetAutoRefreshMinutes'] as int? ?? 0,
       busUpdateTime: json['busUpdateTime'] as int? ?? 10,
@@ -182,6 +190,8 @@ class AppSettings {
   final ThemeMode themeMode;
   final bool alwaysShowSeconds;
   final bool keepScreenAwakeOnRouteDetail;
+  final bool enableRouteBackgroundMonitor;
+  final bool hasSeenRouteBackgroundMonitorPrompt;
   final int favoriteWidgetAutoRefreshMinutes;
   final int busUpdateTime;
   final int busErrorUpdateTime;
@@ -195,6 +205,8 @@ class AppSettings {
     ThemeMode? themeMode,
     bool? alwaysShowSeconds,
     bool? keepScreenAwakeOnRouteDetail,
+    bool? enableRouteBackgroundMonitor,
+    bool? hasSeenRouteBackgroundMonitorPrompt,
     int? favoriteWidgetAutoRefreshMinutes,
     int? busUpdateTime,
     int? busErrorUpdateTime,
@@ -209,6 +221,11 @@ class AppSettings {
       alwaysShowSeconds: alwaysShowSeconds ?? this.alwaysShowSeconds,
       keepScreenAwakeOnRouteDetail:
           keepScreenAwakeOnRouteDetail ?? this.keepScreenAwakeOnRouteDetail,
+      enableRouteBackgroundMonitor:
+          enableRouteBackgroundMonitor ?? this.enableRouteBackgroundMonitor,
+      hasSeenRouteBackgroundMonitorPrompt:
+          hasSeenRouteBackgroundMonitorPrompt ??
+          this.hasSeenRouteBackgroundMonitorPrompt,
       favoriteWidgetAutoRefreshMinutes:
           favoriteWidgetAutoRefreshMinutes ??
           this.favoriteWidgetAutoRefreshMinutes,
@@ -228,6 +245,9 @@ class AppSettings {
       'themeMode': themeMode.name,
       'alwaysShowSeconds': alwaysShowSeconds,
       'keepScreenAwakeOnRouteDetail': keepScreenAwakeOnRouteDetail,
+      'enableRouteBackgroundMonitor': enableRouteBackgroundMonitor,
+      'hasSeenRouteBackgroundMonitorPrompt':
+          hasSeenRouteBackgroundMonitorPrompt,
       'favoriteWidgetAutoRefreshMinutes': favoriteWidgetAutoRefreshMinutes,
       'busUpdateTime': busUpdateTime,
       'busErrorUpdateTime': busErrorUpdateTime,

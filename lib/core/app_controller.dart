@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'android_home_integration.dart';
+import 'android_trip_monitor.dart';
 import 'app_build_info.dart';
 import 'app_update_installer.dart';
 import 'app_update_service.dart';
@@ -94,6 +95,22 @@ class AppController extends ChangeNotifier {
   Future<void> updateKeepScreenAwakeOnRouteDetail(bool value) async {
     _settings = _settings.copyWith(keepScreenAwakeOnRouteDetail: value);
     await storage.saveSettings(_settings);
+    notifyListeners();
+  }
+
+  Future<void> updateEnableRouteBackgroundMonitor(
+    bool value, {
+    bool markPromptSeen = true,
+  }) async {
+    _settings = _settings.copyWith(
+      enableRouteBackgroundMonitor: value,
+      hasSeenRouteBackgroundMonitorPrompt:
+          markPromptSeen || _settings.hasSeenRouteBackgroundMonitorPrompt,
+    );
+    await storage.saveSettings(_settings);
+    if (!value) {
+      await AndroidTripMonitor.stop();
+    }
     notifyListeners();
   }
 

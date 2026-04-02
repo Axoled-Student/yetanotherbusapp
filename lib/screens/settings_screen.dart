@@ -222,6 +222,19 @@ class SettingsScreen extends StatelessWidget {
                     onChanged: controller.updateKeepScreenAwakeOnRouteDetail,
                   ),
                   if (!kIsWeb &&
+                      defaultTargetPlatform == TargetPlatform.android)
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Background trip monitor'),
+                      subtitle: const Text(
+                        'Keep tracking the current route in the background and alert before your destination.',
+                      ),
+                      value: controller.settings.enableRouteBackgroundMonitor,
+                      onChanged: (value) {
+                        controller.updateEnableRouteBackgroundMonitor(value);
+                      },
+                    ),
+                  if (!kIsWeb &&
                       defaultTargetPlatform == TargetPlatform.android) ...[
                     const SizedBox(height: 12),
                     DropdownButtonFormField<int>(

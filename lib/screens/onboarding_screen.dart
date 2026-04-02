@@ -274,7 +274,7 @@ class _ProviderStep extends StatelessWidget {
             padding: const EdgeInsets.all(16),
             child: Text(
               databaseReady
-                  ? '這個 provider 的資料庫已經準備好了。'
+                  ? '這個來源的資料庫已經準備好了。'
                   : '目前還沒下載 ${provider.label} 資料庫，下一步會幫你處理。',
             ),
           ),

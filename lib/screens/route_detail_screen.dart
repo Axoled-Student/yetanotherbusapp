@@ -7,6 +7,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../app/bus_app.dart';
 import '../core/android_home_integration.dart';
+import '../core/android_trip_monitor.dart';
 import '../core/models.dart';
 import '../widgets/eta_badge.dart';
 
@@ -29,7 +30,7 @@ class RouteDetailScreen extends StatefulWidget {
 }
 
 class _RouteDetailScreenState extends State<RouteDetailScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   bool _isLoading = true;
   String? _error;
   String? _statusMessage;
@@ -45,7 +46,14 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   bool _didAutoScrollToCurrentLocation = false;
   bool _didAttemptLocationTracking = false;
   bool? _wakelockEnabled;
+  bool _backgroundTripMonitorReady = false;
+  bool _backgroundTripMonitorPromptInProgress = false;
+  bool _awaitingBackgroundLocationPermission = false;
+  bool _destinationPromptShown = false;
   int? _targetInitialPathId;
+  int? _destinationStopId;
+  String? _destinationStopName;
+  AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
   Map<int, int> _nearestStopByPath = const <int, int>{};
   final Map<int, GlobalKey> _stopKeys = <int, GlobalKey>{};
   final Map<int, ScrollController> _scrollControllers =
@@ -54,6 +62,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _countdownProgressController = AnimationController(vsync: this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_refresh());
@@ -66,10 +75,12 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     _syncWakelock(
       AppControllerScope.of(context).settings.keepScreenAwakeOnRouteDetail,
     );
+    unawaited(_configureBackgroundTripMonitorIfNeeded());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _countdownTimer?.cancel();
     _countdownProgressController.dispose();
     _positionSubscription?.cancel();
@@ -80,7 +91,37 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     if (_wakelockEnabled == true) {
       unawaited(_setWakelock(false));
     }
+    unawaited(AndroidTripMonitor.stop());
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appLifecycleState = state;
+    if (!_isAndroid) {
+      return;
+    }
+    if (state == AppLifecycleState.resumed &&
+        _awaitingBackgroundLocationPermission) {
+      _awaitingBackgroundLocationPermission = false;
+      unawaited(
+        _configureBackgroundTripMonitorIfNeeded(forcePermissionCheck: true),
+      );
+    }
+    if (!AppControllerScope.read(
+          context,
+        ).settings.enableRouteBackgroundMonitor ||
+        !_backgroundTripMonitorReady) {
+      return;
+    }
+    final isForeground = switch (state) {
+      AppLifecycleState.resumed => true,
+      AppLifecycleState.inactive => true,
+      AppLifecycleState.hidden => false,
+      AppLifecycleState.paused => false,
+      AppLifecycleState.detached => false,
+    };
+    unawaited(AndroidTripMonitor.setAppInForeground(isForeground));
   }
 
   Future<void> _refresh() async {
@@ -121,6 +162,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       _scrollToInitialStopIfNeeded();
       _recalculateNearestStops();
       unawaited(_ensureLocationTracking());
+      unawaited(_maybePromptForBackgroundTripMonitor());
+      unawaited(_configureBackgroundTripMonitorIfNeeded());
     } catch (error) {
       if (!mounted) {
         return;
@@ -205,9 +248,17 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       if (_tabController!.indexIsChanging) {
         return;
       }
+      if (_destinationStopId != null &&
+          _currentPathStops.every(
+            (stop) => stop.stopId != _destinationStopId,
+          )) {
+        _destinationStopId = null;
+        _destinationStopName = null;
+      }
       setState(() {});
       _scrollToInitialStopIfNeeded();
       _maybeScrollToCurrentLocation();
+      unawaited(_configureBackgroundTripMonitorIfNeeded());
     });
   }
 
@@ -410,6 +461,314 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
 
   int _keyForStop(int pathId, int stopId) {
     return Object.hash(pathId, stopId);
+  }
+
+  bool get _isAndroid =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  bool get _appIsForeground =>
+      _appLifecycleState == AppLifecycleState.resumed ||
+      _appLifecycleState == AppLifecycleState.inactive;
+
+  PathInfo? get _currentPathInfo {
+    final detail = _detail;
+    final pathId = _currentPathId;
+    if (detail == null || pathId == null) {
+      return null;
+    }
+    for (final path in detail.paths) {
+      if (path.pathId == pathId) {
+        return path;
+      }
+    }
+    return null;
+  }
+
+  List<StopInfo> get _currentPathStops {
+    final detail = _detail;
+    final pathId = _currentPathId;
+    if (detail == null || pathId == null) {
+      return const <StopInfo>[];
+    }
+    return detail.stopsByPath[pathId] ?? const <StopInfo>[];
+  }
+
+  bool _isDestinationStop(StopInfo stop) {
+    return stop.pathId == _currentPathId && stop.stopId == _destinationStopId;
+  }
+
+  Future<void> _maybePromptForBackgroundTripMonitor() async {
+    if (!_isAndroid ||
+        _detail == null ||
+        _backgroundTripMonitorPromptInProgress) {
+      return;
+    }
+    final controller = AppControllerScope.read(context);
+    if (controller.settings.hasSeenRouteBackgroundMonitorPrompt) {
+      return;
+    }
+
+    _backgroundTripMonitorPromptInProgress = true;
+    try {
+      final enable = await showDialog<bool>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('Enable background trip monitor?'),
+            content: const Text(
+              'YABus can keep watching this route after you send the app to the background, and remind you before your destination.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Not now'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('Enable'),
+              ),
+            ],
+          );
+        },
+      );
+      if (!mounted || enable == null) {
+        return;
+      }
+
+      await controller.updateEnableRouteBackgroundMonitor(
+        enable,
+        markPromptSeen: true,
+      );
+      if (enable) {
+        await _configureBackgroundTripMonitorIfNeeded(
+          forcePermissionCheck: true,
+        );
+        await _maybePromptForDestinationSelection();
+      }
+    } finally {
+      _backgroundTripMonitorPromptInProgress = false;
+    }
+  }
+
+  Future<void> _configureBackgroundTripMonitorIfNeeded({
+    bool forcePermissionCheck = false,
+  }) async {
+    if (!_isAndroid || !mounted) {
+      return;
+    }
+
+    final controller = AppControllerScope.read(context);
+    if (!controller.settings.enableRouteBackgroundMonitor) {
+      _backgroundTripMonitorReady = false;
+      await AndroidTripMonitor.stop();
+      return;
+    }
+
+    final detail = _detail;
+    final pathInfo = _currentPathInfo;
+    if (detail == null || pathInfo == null) {
+      return;
+    }
+
+    if (!_backgroundTripMonitorReady || forcePermissionCheck) {
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied && forcePermissionCheck) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        if (!forcePermissionCheck) {
+          return;
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Location permission is required before background trip monitoring can start.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+      if (permission != LocationPermission.always) {
+        if (!forcePermissionCheck) {
+          return;
+        }
+        final openSettings = await _showBackgroundLocationExplainer();
+        if (!mounted || openSettings != true) {
+          return;
+        }
+        _awaitingBackgroundLocationPermission = true;
+        await Geolocator.openAppSettings();
+        return;
+      }
+      await AndroidTripMonitor.requestNotificationPermission();
+      _backgroundTripMonitorReady = true;
+    }
+
+    final pathStops = detail.stopsByPath[pathInfo.pathId] ?? const <StopInfo>[];
+    if (pathStops.isEmpty) {
+      return;
+    }
+    if (_destinationStopId != null &&
+        pathStops.every((stop) => stop.stopId != _destinationStopId)) {
+      setState(() {
+        _destinationStopId = null;
+        _destinationStopName = null;
+      });
+    }
+
+    await AndroidTripMonitor.startOrUpdate(
+      TripMonitorSession(
+        providerName: widget.provider.name,
+        routeKey: widget.routeKey,
+        routeName: detail.route.routeName,
+        pathId: pathInfo.pathId,
+        pathName: pathInfo.name,
+        appInForeground: _appIsForeground,
+        destinationStopId: _destinationStopId,
+        destinationStopName: _destinationStopName,
+        stops: pathStops
+            .map(
+              (stop) => TripMonitorStop(
+                stopId: stop.stopId,
+                stopName: stop.stopName,
+                sequence: stop.sequence,
+                lat: stop.lat,
+                lon: stop.lon,
+              ),
+            )
+            .toList(),
+      ),
+    );
+  }
+
+  Future<bool?> _showBackgroundLocationExplainer() {
+    return showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Allow background location'),
+          content: const Text(
+            'To keep trip reminders working after you background the app, Android needs location access set to "Allow all the time".',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Later'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Open settings'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _maybePromptForDestinationSelection() async {
+    if (_destinationPromptShown ||
+        _destinationStopId != null ||
+        _currentPathStops.isEmpty ||
+        !AppControllerScope.read(
+          context,
+        ).settings.enableRouteBackgroundMonitor) {
+      return;
+    }
+    _destinationPromptShown = true;
+
+    final shouldPick = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Set a destination stop?'),
+          content: const Text(
+            'Pick the stop where you want to get off, and YABus will remind you before arrival.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Later'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Choose stop'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldPick == true) {
+      await _pickDestinationStop();
+    }
+  }
+
+  Future<void> _pickDestinationStop() async {
+    final pathStops = _currentPathStops;
+    if (pathStops.isEmpty) {
+      return;
+    }
+
+    final pickedStop = await showModalBottomSheet<StopInfo>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.of(context).size.height * 0.72,
+            child: ListView.separated(
+              itemCount: pathStops.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final stop = pathStops[index];
+                return ListTile(
+                  title: Text(stop.stopName),
+                  subtitle: Text('Stop ${index + 1}'),
+                  trailing: stop.stopId == _destinationStopId
+                      ? const Icon(Icons.flag_rounded)
+                      : null,
+                  onTap: () => Navigator.of(context).pop(stop),
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+    if (!mounted || pickedStop == null) {
+      return;
+    }
+
+    await _setDestinationStop(pickedStop);
+  }
+
+  Future<void> _setDestinationStop(StopInfo stop) async {
+    setState(() {
+      _destinationStopId = stop.stopId;
+      _destinationStopName = stop.stopName;
+    });
+    await _configureBackgroundTripMonitorIfNeeded();
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Destination set to ${stop.stopName}.')),
+    );
+  }
+
+  Future<void> _clearDestinationStop() async {
+    if (_destinationStopId == null) {
+      return;
+    }
+    setState(() {
+      _destinationStopId = null;
+      _destinationStopName = null;
+    });
+    await _configureBackgroundTripMonitorIfNeeded();
   }
 
   ScrollController _scrollControllerForPath(int pathId) {
@@ -637,6 +996,21 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     );
   }
 
+  Future<void> _handleDestinationAction(StopInfo stop) async {
+    if (_isDestinationStop(stop)) {
+      await _clearDestinationStop();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Destination reminder cleared.')),
+      );
+      return;
+    }
+
+    await _setDestinationStop(stop);
+  }
+
   Future<void> _openStopActionsWithShortcut(StopInfo stop) async {
     final action = await showDialog<_StopAction>(
       context: context,
@@ -647,6 +1021,15 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
             SimpleDialogOption(
               onPressed: () => Navigator.of(context).pop(_StopAction.favorite),
               child: const Text('加入最愛'),
+            ),
+            SimpleDialogOption(
+              onPressed: () =>
+                  Navigator.of(context).pop(_StopAction.destination),
+              child: Text(
+                _isDestinationStop(stop)
+                    ? 'Clear destination reminder'
+                    : 'Set as destination reminder',
+              ),
             ),
             if (defaultTargetPlatform == TargetPlatform.android)
               SimpleDialogOption(
@@ -668,6 +1051,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
 
     if (action == _StopAction.favorite) {
       await _handleFavorite(stop);
+    } else if (action == _StopAction.destination) {
+      await _handleDestinationAction(stop);
     } else if (action == _StopAction.shortcut) {
       await _handlePinnedShortcut(stop);
     }
@@ -731,7 +1116,17 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     ThemeData theme,
     StopInfo stop, {
     required bool isNearest,
+    required bool isDestination,
   }) {
+    if (isDestination) {
+      return _RouteStatusPill(
+        icon: Icons.flag_rounded,
+        label: 'Destination',
+        backgroundColor: theme.colorScheme.tertiaryContainer,
+        foregroundColor: theme.colorScheme.onTertiaryContainer,
+      );
+    }
+
     if (stop.buses.isNotEmpty) {
       final vehicle = stop.buses.first;
       final backgroundColor = isNearest
@@ -773,16 +1168,20 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     required bool alwaysShowSeconds,
     required bool isHighlighted,
     required bool isNearest,
+    required bool isDestination,
   }) {
     final trailingStatus = _buildTrailingStatus(
       theme,
       stop,
       isNearest: isNearest,
+      isDestination: isDestination,
     );
 
     return Material(
       color: isHighlighted
           ? theme.colorScheme.secondaryContainer.withValues(alpha: 0.45)
+          : isDestination
+          ? theme.colorScheme.tertiaryContainer.withValues(alpha: 0.22)
           : Colors.transparent,
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
@@ -853,6 +1252,17 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
               onPressed: () =>
                   unawaited(_scrollToStop(currentPathId, currentNearestStopId)),
               icon: const Icon(Icons.gps_fixed_rounded),
+            ),
+          if (_currentPathStops.isNotEmpty)
+            IconButton(
+              onPressed: () => _destinationStopId == null
+                  ? unawaited(_pickDestinationStop())
+                  : unawaited(_clearDestinationStop()),
+              icon: Icon(
+                _destinationStopId == null
+                    ? Icons.flag_outlined
+                    : Icons.flag_rounded,
+              ),
             ),
           IconButton(
             onPressed: _refresh,
@@ -966,6 +1376,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
                                         controller.settings.alwaysShowSeconds,
                                     isHighlighted: _isInitialStop(stop),
                                     isNearest: _isNearestStop(stop),
+                                    isDestination: _isDestinationStop(stop),
                                   ),
                                 );
                               },
@@ -1018,4 +1429,4 @@ class _RouteStatusPill extends StatelessWidget {
   }
 }
 
-enum _StopAction { favorite, shortcut }
+enum _StopAction { favorite, destination, shortcut }
