@@ -268,7 +268,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
           child: child,
         );
       },
-      child: _isLoading
+      child: _remainingSeconds <= 0 || _isLoading
           ? const LinearProgressIndicator(
               key: ValueKey('loading-progress'),
               minHeight: 4,
