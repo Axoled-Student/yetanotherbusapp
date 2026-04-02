@@ -225,9 +225,9 @@ class SettingsScreen extends StatelessWidget {
                       defaultTargetPlatform == TargetPlatform.android)
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
-                      title: const Text('Background trip monitor'),
+                      title: const Text('背景乘車提醒'),
                       subtitle: const Text(
-                        'Keep tracking the current route in the background and alert before your destination.',
+                        '在背景持續追蹤目前路線，並在接近目的地下車時提醒你。',
                       ),
                       value: controller.settings.enableRouteBackgroundMonitor,
                       onChanged: (value) {

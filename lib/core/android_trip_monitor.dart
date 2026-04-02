@@ -36,6 +36,8 @@ class TripMonitorSession {
     required this.pathName,
     required this.appInForeground,
     required this.stops,
+    this.initialLatitude,
+    this.initialLongitude,
     this.destinationStopId,
     this.destinationStopName,
   });
@@ -47,6 +49,8 @@ class TripMonitorSession {
   final String pathName;
   final bool appInForeground;
   final List<TripMonitorStop> stops;
+  final double? initialLatitude;
+  final double? initialLongitude;
   final int? destinationStopId;
   final String? destinationStopName;
 
@@ -58,6 +62,8 @@ class TripMonitorSession {
       'pathId': pathId,
       'pathName': pathName,
       'appInForeground': appInForeground,
+      'initialLatitude': initialLatitude,
+      'initialLongitude': initialLongitude,
       'destinationStopId': destinationStopId,
       'destinationStopName': destinationStopName,
       'stops': stops.map((stop) => stop.toMap()).toList(),

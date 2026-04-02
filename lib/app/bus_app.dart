@@ -157,6 +157,8 @@ class _AppHomeState extends State<_AppHome> {
       return;
     }
     _pendingLaunchAction = null;
+    final navigator = Navigator.of(context);
+    navigator.popUntil((route) => route.isFirst);
 
     switch (action.target) {
       case AppLaunchTarget.routeDetail:
@@ -165,7 +167,7 @@ class _AppHomeState extends State<_AppHome> {
         if (provider == null || routeKey == null) {
           return;
         }
-        await Navigator.of(context).push(
+        await navigator.push(
           MaterialPageRoute<void>(
             builder: (_) => RouteDetailScreen(
               routeKey: routeKey,
@@ -176,7 +178,7 @@ class _AppHomeState extends State<_AppHome> {
           ),
         );
       case AppLaunchTarget.favoritesGroup:
-        await Navigator.of(context).push(
+        await navigator.push(
           MaterialPageRoute<void>(
             builder: (_) => FavoritesScreen(initialGroupName: action.groupName),
           ),

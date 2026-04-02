@@ -514,18 +514,18 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
         context: context,
         builder: (context) {
           return AlertDialog(
-            title: const Text('Enable background trip monitor?'),
+            title: const Text('啟用背景乘車提醒？'),
             content: const Text(
-              'YABus can keep watching this route after you send the app to the background, and remind you before your destination.',
+              'YABus 可以在你把 app 丟到背景後繼續追蹤這條路線，並在接近目的地下車前提醒你。',
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('Not now'),
+                child: const Text('暫時不要'),
               ),
               FilledButton(
                 onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('Enable'),
+                child: const Text('啟用'),
               ),
             ],
           );
@@ -584,7 +584,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text(
-                'Location permission is required before background trip monitoring can start.',
+                '要使用背景乘車提醒，必須先允許定位權限。',
               ),
             ),
           );
@@ -629,6 +629,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
         appInForeground: _appIsForeground,
         destinationStopId: _destinationStopId,
         destinationStopName: _destinationStopName,
+        initialLatitude: _lastPosition?.latitude,
+        initialLongitude: _lastPosition?.longitude,
         stops: pathStops
             .map(
               (stop) => TripMonitorStop(
@@ -649,18 +651,18 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Allow background location'),
+          title: const Text('允許背景定位'),
           content: const Text(
-            'To keep trip reminders working after you background the app, Android needs location access set to "Allow all the time".',
+            '要在把 app 丟到背景後繼續提醒，Android 需要將定位權限設為「永遠允許」。',
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Later'),
+              child: const Text('稍後再說'),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Open settings'),
+              child: const Text('前往設定'),
             ),
           ],
         );
@@ -683,18 +685,18 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Set a destination stop?'),
+          title: const Text('要設定下車提醒嗎？'),
           content: const Text(
-            'Pick the stop where you want to get off, and YABus will remind you before arrival.',
+            '選一個你要下車的站牌，YABus 會在快到站時提醒你。',
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Later'),
+              child: const Text('稍後再說'),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Choose stop'),
+              child: const Text('選擇站牌'),
             ),
           ],
         );
@@ -727,7 +729,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
                 final stop = pathStops[index];
                 return ListTile(
                   title: Text(stop.stopName),
-                  subtitle: Text('Stop ${index + 1}'),
+                  subtitle: Text('第 ${index + 1} 站'),
                   trailing: stop.stopId == _destinationStopId
                       ? const Icon(Icons.flag_rounded)
                       : null,
@@ -756,7 +758,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       return;
     }
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Destination set to ${stop.stopName}.')),
+      SnackBar(content: Text('已將 ${stop.stopName} 設為下車提醒。')),
     );
   }
 
@@ -1003,7 +1005,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Destination reminder cleared.')),
+        const SnackBar(content: Text('已清除下車提醒。')),
       );
       return;
     }
@@ -1027,8 +1029,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
                   Navigator.of(context).pop(_StopAction.destination),
               child: Text(
                 _isDestinationStop(stop)
-                    ? 'Clear destination reminder'
-                    : 'Set as destination reminder',
+                    ? '清除下車提醒'
+                    : '設為下車提醒',
               ),
             ),
             if (defaultTargetPlatform == TargetPlatform.android)

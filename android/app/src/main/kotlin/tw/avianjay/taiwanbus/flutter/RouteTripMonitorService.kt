@@ -51,9 +51,7 @@ class RouteTripMonitorService : Service() {
             if (!foregroundStarted) {
                 return
             }
-            if (!appInForeground) {
-                refreshNotification()
-            }
+            refreshNotification()
             mainHandler.postDelayed(this, POLL_INTERVAL_MS)
         }
     }
@@ -61,9 +59,7 @@ class RouteTripMonitorService : Service() {
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(locationResult: LocationResult) {
             latestLocation = locationResult.lastLocation
-            if (!appInForeground) {
-                refreshNotification()
-            }
+            refreshNotification()
         }
     }
 
@@ -96,12 +92,22 @@ class RouteTripMonitorService : Service() {
                     stopTracking()
                     return START_NOT_STICKY
                 }
+
                 val previousDestination = session?.destinationStopId
                 session = parsedSession
                 appInForeground = parsedSession.appInForeground
                 if (previousDestination != parsedSession.destinationStopId) {
                     destinationAlertStage = 0
                 }
+                latestLocation = parsedSession.initialLatitude?.let { latitude ->
+                    parsedSession.initialLongitude?.let { longitude ->
+                        Location("trip_monitor_session").apply {
+                            this.latitude = latitude
+                            this.longitude = longitude
+                        }
+                    }
+                } ?: latestLocation
+
                 ensureForegroundStarted(parsedSession)
                 requestLocationUpdates()
                 refreshNotification()
@@ -124,17 +130,19 @@ class RouteTripMonitorService : Service() {
         if (foregroundStarted) {
             return
         }
+
         val initialNotification = buildTrackingNotification(
             TrackingSnapshot(
                 title = session.routeName,
                 content = if (appInForeground) {
-                    "Trip monitor ready. Updates continue after the app goes to the background."
+                    "準備背景乘車提醒..."
                 } else {
-                    "Preparing live trip updates..."
+                    "背景乘車提醒已啟動"
                 },
-                subText = session.pathName,
+                subText = session.pathName.ifBlank { "即使切到背景也會持續更新" },
                 progressMax = null,
                 progressValue = null,
+                shortCriticalText = null,
             ),
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -168,9 +176,7 @@ class RouteTripMonitorService : Service() {
             fusedLocationClient.lastLocation.addOnSuccessListener { location ->
                 if (location != null) {
                     latestLocation = location
-                    if (!appInForeground) {
-                        refreshNotification()
-                    }
+                    refreshNotification()
                 }
             }
         }
@@ -199,10 +205,11 @@ class RouteTripMonitorService : Service() {
         if (location == null) {
             return TrackingSnapshot(
                 title = session.routeName,
-                content = "Waiting for current location...",
-                subText = session.pathName,
+                content = "等待目前位置...",
+                subText = session.pathName.ifBlank { "背景乘車提醒進行中" },
                 progressMax = null,
                 progressValue = null,
+                shortCriticalText = null,
             )
         }
 
@@ -220,10 +227,11 @@ class RouteTripMonitorService : Service() {
         if (nearestIndex == -1) {
             return TrackingSnapshot(
                 title = session.routeName,
-                content = "Unable to determine your nearest stop.",
-                subText = session.pathName,
+                content = "暫時無法判斷最近站牌",
+                subText = session.pathName.ifBlank { "背景乘車提醒進行中" },
                 progressMax = null,
                 progressValue = null,
+                shortCriticalText = null,
             )
         }
 
@@ -232,19 +240,13 @@ class RouteTripMonitorService : Service() {
         val busIndex = findClosestBusIndex(session.stops, liveStops, nearestIndex)
         val busStopsAway = busIndex?.let { (nearestIndex - it).coerceAtLeast(0) }
         val nearestEtaText = formatEtaText(nearestLiveStop)
-        val nearestSubText = buildString {
-            append(nearestStop.stopName)
-            if (busStopsAway != null) {
-                append(" • ")
-                append(
-                    if (busStopsAway == 0) {
-                        "bus nearby"
-                    } else {
-                        "$busStopsAway stops away"
-                    },
-                )
-            }
-        }
+        val nearestEtaShort = formatShortEtaText(nearestLiveStop)
+        val nearestSubText = buildNearestSubText(
+            session = session,
+            nearestStop = nearestStop,
+            busStopsAway = busStopsAway,
+            nearestEtaText = nearestEtaText,
+        )
 
         val destinationIndex = session.destinationStopId?.let { destinationStopId ->
             session.stops.indexOfFirst { stop -> stop.stopId == destinationStopId }
@@ -253,17 +255,19 @@ class RouteTripMonitorService : Service() {
         if (destinationIndex == null) {
             return TrackingSnapshot(
                 title = session.routeName,
-                content = "${nearestStop.stopName} • $nearestEtaText",
+                content = "${nearestStop.stopName} · $nearestEtaText",
                 subText = nearestSubText,
                 progressMax = null,
                 progressValue = null,
+                shortCriticalText = buildShortCriticalText(busStopsAway, nearestEtaShort),
             )
         }
 
         val destinationStop = session.stops[destinationIndex]
-        val remainingStops = (destinationIndex - nearestIndex).coerceAtLeast(0)
         val destinationLive = liveStops[destinationStop.stopId]
-        val destinationEta = formatEtaText(destinationLive)
+        val remainingStops = (destinationIndex - nearestIndex).coerceAtLeast(0)
+        val destinationEtaText = formatEtaText(destinationLive)
+        val destinationEtaShort = formatShortEtaText(destinationLive)
         val destinationDistanceMeters = distanceMeters(
             location.latitude,
             location.longitude,
@@ -271,35 +275,54 @@ class RouteTripMonitorService : Service() {
             destinationStop.lon,
         )
         val currentProgress = (nearestIndex + 1).coerceAtMost(destinationIndex + 1)
+
         return TrackingSnapshot(
-            title = "${session.routeName} → ${destinationStop.stopName}",
+            title = "${session.routeName} · ${destinationStop.stopName}",
             content = when {
-                remainingStops == 0 -> "You are near ${destinationStop.stopName}."
-                else -> "${destinationStop.stopName}: $remainingStops stops left • $destinationEta"
+                remainingStops == 0 -> "已接近 ${destinationStop.stopName}"
+                else -> "${destinationStop.stopName} 還有 $remainingStops 站 · $destinationEtaText"
             },
-            subText = "Nearest ${nearestStop.stopName} • $nearestEtaText",
+            subText = "最近站牌 ${nearestStop.stopName} · $nearestEtaText",
             progressMax = destinationIndex + 1,
             progressValue = currentProgress,
             destinationName = destinationStop.stopName,
             remainingStops = remainingStops,
             destinationDistanceMeters = destinationDistanceMeters,
+            shortCriticalText = buildShortCriticalText(remainingStops, destinationEtaShort),
         )
+    }
+
+    private fun buildNearestSubText(
+        session: TrackingSession,
+        nearestStop: TrackingStop,
+        busStopsAway: Int?,
+        nearestEtaText: String,
+    ): String {
+        val parts = mutableListOf<String>()
+        if (session.pathName.isNotBlank()) {
+            parts += session.pathName
+        }
+        parts += "最近站牌 ${nearestStop.stopName}"
+        if (nearestEtaText != "--") {
+            parts += nearestEtaText
+        }
+        buildBusDistanceText(busStopsAway)?.let(parts::add)
+        return parts.joinToString(" · ")
     }
 
     private fun buildTrackingNotification(snapshot: TrackingSnapshot): android.app.Notification {
         val currentSession = session ?: return NotificationCompat.Builder(
             this,
             TRACKING_CHANNEL_ID,
-        ).setSmallIcon(R.mipmap.ic_launcher)
+        ).setSmallIcon(R.drawable.ic_notification_bus)
             .setContentTitle("YABus")
-            .setContentText("Trip monitor stopped.")
+            .setContentText("背景乘車提醒已停止")
             .build()
 
         val builder = NotificationCompat.Builder(this, TRACKING_CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification_bus)
             .setContentTitle(snapshot.title)
             .setContentText(snapshot.content)
-            .setSubText(snapshot.subText)
             .setContentIntent(createOpenRoutePendingIntent(currentSession))
             .setDeleteIntent(createStopPendingIntent())
             .setOngoing(true)
@@ -310,10 +333,15 @@ class RouteTripMonitorService : Service() {
             .addAction(
                 NotificationCompat.Action.Builder(
                     0,
-                    "Stop",
+                    "停止",
                     createStopPendingIntent(),
                 ).build(),
             )
+
+        if (snapshot.subText.isNotBlank()) {
+            builder.setSubText(snapshot.subText)
+        }
+        snapshot.shortCriticalText?.let(builder::setShortCriticalText)
 
         val progressMax = snapshot.progressMax
         val progressValue = snapshot.progressValue
@@ -323,7 +351,7 @@ class RouteTripMonitorService : Service() {
                 .setStyledByProgress(true)
                 .setProgress(progressValue)
                 .setProgressTrackerIcon(
-                    IconCompat.createWithResource(this, R.mipmap.ic_launcher),
+                    IconCompat.createWithResource(this, R.drawable.ic_notification_bus),
                 )
                 .setProgressSegments(
                     mutableListOf(
@@ -336,7 +364,7 @@ class RouteTripMonitorService : Service() {
                     ),
                 )
                 .setProgressEndIcon(
-                    IconCompat.createWithResource(this, R.mipmap.ic_launcher),
+                    IconCompat.createWithResource(this, R.drawable.ic_progress_flag),
                 )
             builder.setStyle(progressStyle)
         } else {
@@ -350,6 +378,9 @@ class RouteTripMonitorService : Service() {
         session: TrackingSession,
         snapshot: TrackingSnapshot,
     ) {
+        if (appInForeground) {
+            return
+        }
         val destinationName = snapshot.destinationName ?: return
         val remainingStops = snapshot.remainingStops ?: return
         val distanceMeters = snapshot.destinationDistanceMeters ?: return
@@ -359,12 +390,13 @@ class RouteTripMonitorService : Service() {
             notificationManager.notify(
                 ALERT_NOTIFICATION_ID,
                 NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
-                    .setSmallIcon(R.mipmap.ic_launcher)
-                    .setContentTitle("${session.routeName} is getting close")
-                    .setContentText("$destinationName is about $remainingStops stops away.")
+                    .setSmallIcon(R.drawable.ic_notification_bus)
+                    .setContentTitle("${session.routeName} 快到了")
+                    .setContentText("$destinationName 還有 $remainingStops 站")
+                    .setSubText(session.pathName)
                     .setStyle(
                         NotificationCompat.BigTextStyle().bigText(
-                            "$destinationName is about $remainingStops stops away. Keep an eye on the bus and get ready to get off.",
+                            "$destinationName 大約還有 $remainingStops 站，請留意站序，準備下車。",
                         ),
                     )
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -380,12 +412,13 @@ class RouteTripMonitorService : Service() {
             notificationManager.notify(
                 ALERT_NOTIFICATION_ID,
                 NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
-                    .setSmallIcon(R.mipmap.ic_launcher)
-                    .setContentTitle("Arriving soon")
-                    .setContentText("You are near $destinationName.")
+                    .setSmallIcon(R.drawable.ic_notification_bus)
+                    .setContentTitle("準備下車")
+                    .setContentText("你已接近 $destinationName")
+                    .setSubText(session.pathName)
                     .setStyle(
                         NotificationCompat.BigTextStyle().bigText(
-                            "You are near $destinationName. Please prepare to get off the bus.",
+                            "你已接近 $destinationName，請準備下車。",
                         ),
                     )
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -401,23 +434,24 @@ class RouteTripMonitorService : Service() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return
         }
+
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(
                 TRACKING_CHANNEL_ID,
-                "Trip monitor",
+                "背景乘車提醒",
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = "Ongoing route tracking for YABus."
+                description = "在背景持續追蹤目前路線與下車提醒。"
             },
         )
         manager.createNotificationChannel(
             NotificationChannel(
                 ALERT_CHANNEL_ID,
-                "Trip alerts",
+                "下車提醒",
                 NotificationManager.IMPORTANCE_HIGH,
             ).apply {
-                description = "Arrival reminders for monitored routes."
+                description = "接近目的地時提醒你準備下車。"
                 enableLights(true)
                 lightColor = Color.CYAN
                 enableVibration(true)
@@ -552,6 +586,10 @@ class RouteTripMonitorService : Service() {
                 pathId = root.optInt("pathId", 0),
                 pathName = root.optString("pathName", ""),
                 appInForeground = root.optBoolean("appInForeground", true),
+                initialLatitude = root.optDouble("initialLatitude", Double.NaN)
+                    .takeUnless { it.isNaN() },
+                initialLongitude = root.optDouble("initialLongitude", Double.NaN)
+                    .takeUnless { it.isNaN() },
                 destinationStopId = root.optInt("destinationStopId", -1)
                     .takeIf { it > 0 },
                 destinationStopName = root.optString("destinationStopName", "")
@@ -565,18 +603,84 @@ class RouteTripMonitorService : Service() {
 
     private fun formatEtaText(liveStopState: LiveStopState?): String {
         liveStopState ?: return "--"
-        val message = liveStopState.message?.trim().orEmpty()
-        if (message.isNotEmpty()) {
+        val message = normalizeEtaMessage(liveStopState.message)
+        if (message != null) {
             return message
         }
+
         val seconds = liveStopState.seconds ?: return "--"
         if (seconds <= 0) {
-            return "arriving"
+            return "進站中"
         }
         if (seconds < 60) {
-            return "<1 min"
+            return "即將進站"
         }
-        return "${seconds / 60} min"
+        return "${seconds / 60} 分"
+    }
+
+    private fun formatShortEtaText(liveStopState: LiveStopState?): String {
+        liveStopState ?: return "--"
+        val message = liveStopState.message?.trim().orEmpty()
+        if (message.isNotEmpty()) {
+            return when {
+                message.contains("進站") || message.contains("到站") -> "進站"
+                message.contains("即將") -> "即將"
+                message.contains("未發車") -> "未發"
+                message.contains("末班") -> "末班"
+                else -> message.take(6)
+            }
+        }
+
+        val seconds = liveStopState.seconds ?: return "--"
+        if (seconds <= 0) {
+            return "進站"
+        }
+        if (seconds < 60) {
+            return "<1分"
+        }
+        return "${seconds / 60}分"
+    }
+
+    private fun normalizeEtaMessage(message: String?): String? {
+        val trimmed = message?.trim().orEmpty()
+        if (trimmed.isEmpty()) {
+            return null
+        }
+
+        return when {
+            trimmed.contains("進站") || trimmed.contains("到站") -> "進站中"
+            trimmed.contains("即將") -> "即將進站"
+            trimmed.contains("未發車") -> "未發車"
+            trimmed.contains("末班") -> "末班已過"
+            else -> trimmed
+        }
+    }
+
+    private fun buildBusDistanceText(busStopsAway: Int?): String? {
+        return when (busStopsAway) {
+            null -> null
+            0 -> "公車就在附近"
+            else -> "公車還有 $busStopsAway 站"
+        }
+    }
+
+    private fun buildShortCriticalText(stopsAway: Int?, etaText: String): String? {
+        if (stopsAway == null && etaText == "--") {
+            return null
+        }
+
+        val left = when (stopsAway) {
+            null -> null
+            0 -> "到站"
+            else -> "${stopsAway}站"
+        }
+        if (left == null) {
+            return etaText
+        }
+        if (etaText == "--") {
+            return left
+        }
+        return "$left | $etaText"
     }
 
     private fun findClosestBusIndex(
@@ -586,7 +690,7 @@ class RouteTripMonitorService : Service() {
     ): Int? {
         val busIndexes = stops.mapIndexedNotNull { index, stop ->
             val liveStop = liveStops[stop.stopId] ?: return@mapIndexedNotNull null
-            if (liveStop.vehicleIds.isNotEmpty() || liveStop.message == "進站中") {
+            if (isBusApproachingStop(liveStop)) {
                 index
             } else {
                 null
@@ -597,6 +701,14 @@ class RouteTripMonitorService : Service() {
             return behindOrAtUser.maxOrNull()
         }
         return busIndexes.minOrNull()
+    }
+
+    private fun isBusApproachingStop(liveStop: LiveStopState): Boolean {
+        val message = liveStop.message?.trim().orEmpty()
+        return liveStop.vehicleIds.isNotEmpty() ||
+            (liveStop.seconds != null && liveStop.seconds <= 0) ||
+            message.contains("進站") ||
+            message.contains("到站")
     }
 
     private fun distanceMeters(
@@ -663,6 +775,8 @@ data class TrackingSession(
     val pathId: Int,
     val pathName: String,
     val appInForeground: Boolean,
+    val initialLatitude: Double?,
+    val initialLongitude: Double?,
     val destinationStopId: Int?,
     val destinationStopName: String?,
     val stops: List<TrackingStop>,
@@ -688,6 +802,7 @@ data class TrackingSnapshot(
     val subText: String,
     val progressMax: Int?,
     val progressValue: Int?,
+    val shortCriticalText: String? = null,
     val destinationName: String? = null,
     val remainingStops: Int? = null,
     val destinationDistanceMeters: Double? = null,
