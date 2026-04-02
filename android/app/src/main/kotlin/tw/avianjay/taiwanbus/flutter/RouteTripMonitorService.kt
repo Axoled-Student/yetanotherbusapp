@@ -1,5 +1,6 @@
 package tw.avianjay.taiwanbus.flutter
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -8,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Color
+import android.graphics.drawable.Icon
 import android.location.Location
 import android.os.Build
 import android.os.Handler
@@ -142,7 +144,7 @@ class RouteTripMonitorService : Service() {
                 subText = session.pathName.ifBlank { "即使切到背景也會持續更新" },
                 progressMax = null,
                 progressValue = null,
-                shortCriticalText = null,
+                shortCriticalText = "啟動中",
             ),
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -209,7 +211,7 @@ class RouteTripMonitorService : Service() {
                 subText = session.pathName.ifBlank { "背景乘車提醒進行中" },
                 progressMax = null,
                 progressValue = null,
-                shortCriticalText = null,
+                shortCriticalText = "定位中",
             )
         }
 
@@ -231,7 +233,7 @@ class RouteTripMonitorService : Service() {
                 subText = session.pathName.ifBlank { "背景乘車提醒進行中" },
                 progressMax = null,
                 progressValue = null,
-                shortCriticalText = null,
+                shortCriticalText = "更新中",
             )
         }
 
@@ -310,7 +312,156 @@ class RouteTripMonitorService : Service() {
         return parts.joinToString(" · ")
     }
 
-    private fun buildTrackingNotification(snapshot: TrackingSnapshot): android.app.Notification {
+    private fun buildTrackingNotification(snapshot: TrackingSnapshot): Notification {
+        val currentSession = session ?: return buildStoppedNotification()
+        return if (supportsFrameworkLiveUpdate()) {
+            buildFrameworkTrackingNotification(currentSession, snapshot)
+        } else {
+            buildCompatTrackingNotification(currentSession, snapshot)
+        }
+    }
+
+    private fun buildStoppedNotification(): Notification {
+        return NotificationCompat.Builder(this, TRACKING_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification_bus)
+            .setContentTitle("YABus")
+            .setContentText("背景乘車提醒已停止")
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .build()
+    }
+
+    private fun buildCompatTrackingNotification(
+        session: TrackingSession,
+        snapshot: TrackingSnapshot,
+    ): Notification {
+        val builder = NotificationCompat.Builder(this, TRACKING_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification_bus)
+            .setContentTitle(snapshot.title)
+            .setContentText(snapshot.content)
+            .setSubText(snapshot.subText)
+            .setContentIntent(createOpenRoutePendingIntent(session))
+            .setDeleteIntent(createStopPendingIntent())
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setPublicVersion(buildPublicTrackingNotification(snapshot))
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setColorized(true)
+            .setColor(ACCENT_COLOR)
+            .addAction(
+                NotificationCompat.Action.Builder(
+                    0,
+                    "停止",
+                    createStopPendingIntent(),
+                ).build(),
+            )
+
+        builder.setShortCriticalText(snapshot.shortCriticalText ?: "更新中")
+
+        requestPromotedOngoing(builder)
+        val progressMax = snapshot.progressMax
+        val progressValue = snapshot.progressValue
+        if (progressMax != null && progressValue != null) {
+            builder.setProgress(progressMax, progressValue, false)
+            val progressStyle = NotificationCompat.ProgressStyle()
+                .setStyledByProgress(true)
+                .setProgress(progressValue)
+                .setProgressTrackerIcon(
+                    IconCompat.createWithResource(this, R.drawable.ic_notification_bus),
+                )
+                .setProgressSegments(
+                    mutableListOf(
+                        NotificationCompat.ProgressStyle.Segment(progressMax),
+                    ),
+                )
+                .setProgressPoints(
+                    mutableListOf(
+                        NotificationCompat.ProgressStyle.Point(progressMax),
+                    ),
+                )
+                .setProgressEndIcon(
+                    IconCompat.createWithResource(this, R.drawable.ic_progress_flag),
+                )
+            builder.setStyle(progressStyle)
+        } else {
+            builder.setProgress(0, 0, false)
+        }
+
+        return builder.build()
+    }
+
+    private fun buildFrameworkTrackingNotification(
+        session: TrackingSession,
+        snapshot: TrackingSnapshot,
+    ): Notification {
+        val builder = Notification.Builder(this, TRACKING_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification_bus)
+            .setContentTitle(snapshot.title)
+            .setContentText(snapshot.content)
+            .setSubText(snapshot.subText)
+            .setContentIntent(createOpenRoutePendingIntent(session))
+            .setDeleteIntent(createStopPendingIntent())
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setPublicVersion(buildPublicTrackingNotification(snapshot))
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(Notification.CATEGORY_NAVIGATION)
+            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+            .setColorized(true)
+            .setColor(ACCENT_COLOR)
+            .addAction(
+                Notification.Action.Builder(
+                    null,
+                    "停止",
+                    createStopPendingIntent(),
+                ).build(),
+            )
+
+        builder.setShortCriticalText(snapshot.shortCriticalText ?: "更新中")
+
+        requestPromotedOngoing(builder)
+        val progressMax = snapshot.progressMax
+        val progressValue = snapshot.progressValue
+        if (progressMax != null && progressValue != null) {
+            builder.setProgress(progressMax, progressValue, false)
+            val progressStyle = Notification.ProgressStyle()
+                .setStyledByProgress(true)
+                .setProgress(progressValue)
+                .setProgressTrackerIcon(
+                    Icon.createWithResource(this, R.drawable.ic_notification_bus),
+                )
+                .setProgressSegments(
+                    mutableListOf(
+                        Notification.ProgressStyle.Segment(progressMax),
+                    ),
+                )
+                .setProgressPoints(
+                    mutableListOf(
+                        Notification.ProgressStyle.Point(progressMax),
+                    ),
+                )
+                .setProgressEndIcon(
+                    Icon.createWithResource(this, R.drawable.ic_progress_flag),
+                )
+            builder.setStyle(progressStyle)
+        }
+
+        return builder.build()
+    }
+
+    private fun buildPublicTrackingNotification(snapshot: TrackingSnapshot): Notification {
+        return NotificationCompat.Builder(this, TRACKING_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification_bus)
+            .setContentTitle(snapshot.title)
+            .setContentText(snapshot.content)
+            .setSubText(snapshot.subText)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOnlyAlertOnce(true)
+            .build()
+    }
+
+    private fun buildLegacyTrackingNotification(snapshot: TrackingSnapshot): android.app.Notification {
         val currentSession = session ?: return NotificationCompat.Builder(
             this,
             TRACKING_CHANNEL_ID,
@@ -394,6 +545,15 @@ class RouteTripMonitorService : Service() {
                     .setContentTitle("${session.routeName} 快到了")
                     .setContentText("$destinationName 還有 $remainingStops 站")
                     .setSubText(session.pathName)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setPublicVersion(
+                        NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+                            .setSmallIcon(R.drawable.ic_notification_bus)
+                            .setContentTitle("${session.routeName} 快到了")
+                            .setContentText("$destinationName 還有 $remainingStops 站")
+                            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                            .build(),
+                    )
                     .setStyle(
                         NotificationCompat.BigTextStyle().bigText(
                             "$destinationName 大約還有 $remainingStops 站，請留意站序，準備下車。",
@@ -416,6 +576,15 @@ class RouteTripMonitorService : Service() {
                     .setContentTitle("準備下車")
                     .setContentText("你已接近 $destinationName")
                     .setSubText(session.pathName)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setPublicVersion(
+                        NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+                            .setSmallIcon(R.drawable.ic_notification_bus)
+                            .setContentTitle("準備下車")
+                            .setContentText("你已接近 $destinationName")
+                            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                            .build(),
+                    )
                     .setStyle(
                         NotificationCompat.BigTextStyle().bigText(
                             "你已接近 $destinationName，請準備下車。",
@@ -664,7 +833,22 @@ class RouteTripMonitorService : Service() {
         }
     }
 
-    private fun buildShortCriticalText(stopsAway: Int?, etaText: String): String? {
+    private fun buildShortCriticalText(stopsAway: Int?, etaText: String): String {
+        val left = when (stopsAway) {
+            null -> null
+            0 -> "到站"
+            else -> "${stopsAway}站"
+        }
+        val compact = when {
+            left == null && etaText == "--" -> "更新中"
+            left == null -> etaText
+            etaText == "--" -> left
+            else -> "$left|$etaText"
+        }
+        return compact.take(7)
+    }
+
+    private fun buildLegacyShortCriticalText(stopsAway: Int?, etaText: String): String? {
         if (stopsAway == null && etaText == "--") {
             return null
         }
@@ -722,6 +906,23 @@ class RouteTripMonitorService : Service() {
         return results[0].toDouble()
     }
 
+    private fun requestPromotedOngoing(builder: Notification.Builder) {
+        runCatching {
+            builder.javaClass.getMethod(
+                "setRequestPromotedOngoing",
+                Boolean::class.javaPrimitiveType,
+            ).invoke(builder, true)
+        }
+    }
+
+    private fun requestPromotedOngoing(builder: NotificationCompat.Builder) {
+        builder.setRequestPromotedOngoing(true)
+    }
+
+    private fun supportsFrameworkLiveUpdate(): Boolean {
+        return Build.VERSION.SDK_INT >= LIVE_UPDATE_SDK_INT
+    }
+
     companion object {
         private const val ACTION_START_OR_UPDATE =
             "tw.avianjay.taiwanbus.flutter.action.START_OR_UPDATE_TRIP_MONITOR"
@@ -741,6 +942,8 @@ class RouteTripMonitorService : Service() {
         private const val POLL_INTERVAL_MS = 15_000L
         private const val LOCATION_UPDATE_INTERVAL_MS = 12_000L
         private const val LOCATION_MIN_UPDATE_INTERVAL_MS = 6_000L
+        private const val LIVE_UPDATE_SDK_INT = 36
+        private const val ACCENT_COLOR = -16027003
 
         fun startOrUpdate(context: Context, session: Map<String, Any?>) {
             val sessionJson = JSONObject(session).toString()
