@@ -267,6 +267,8 @@ class FavoriteStop {
     required this.routeKey,
     required this.pathId,
     required this.stopId,
+    this.routeName,
+    this.stopName,
   });
 
   factory FavoriteStop.fromJson(Map<String, dynamic> json) {
@@ -275,6 +277,8 @@ class FavoriteStop {
       routeKey: json['routeKey'] as int? ?? 0,
       pathId: json['pathId'] as int? ?? 0,
       stopId: json['stopId'] as int? ?? 0,
+      routeName: json['routeName'] as String?,
+      stopName: json['stopName'] as String?,
     );
   }
 
@@ -282,6 +286,8 @@ class FavoriteStop {
   final int routeKey;
   final int pathId;
   final int stopId;
+  final String? routeName;
+  final String? stopName;
 
   Map<String, dynamic> toJson() {
     return {
@@ -289,6 +295,8 @@ class FavoriteStop {
       'routeKey': routeKey,
       'pathId': pathId,
       'stopId': stopId,
+      if (routeName != null) 'routeName': routeName,
+      if (stopName != null) 'stopName': stopName,
     };
   }
 

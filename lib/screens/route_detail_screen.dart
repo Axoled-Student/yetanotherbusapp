@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../app/bus_app.dart';
+import '../core/android_home_integration.dart';
 import '../core/models.dart';
 import '../widgets/eta_badge.dart';
 
@@ -549,6 +550,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     return _nearestStopByPath[stop.pathId] == stop.stopId;
   }
 
+  // ignore: unused_element
   Future<void> _openStopActions(StopInfo stop) async {
     final action = await showDialog<_StopAction>(
       context: context,
@@ -603,6 +605,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
         routeKey: widget.routeKey,
         pathId: stop.pathId,
         stopId: stop.stopId,
+        routeName: _detail?.route.routeName,
+        stopName: stop.stopName,
       ),
       groupName: groupName,
     );
@@ -612,6 +616,61 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text('已加入 $selectedGroup')));
+  }
+
+  Future<void> _handlePinnedShortcut(StopInfo stop) async {
+    final didPin = await AndroidHomeIntegration.pinStopShortcut(
+      favorite: FavoriteStop(
+        provider: widget.provider,
+        routeKey: widget.routeKey,
+        pathId: stop.pathId,
+        stopId: stop.stopId,
+        routeName: _detail?.route.routeName,
+        stopName: stop.stopName,
+      ),
+    );
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(didPin ? '已送出主畫面捷徑要求。' : '這台裝置不支援主畫面捷徑。')),
+    );
+  }
+
+  Future<void> _openStopActionsWithShortcut(StopInfo stop) async {
+    final action = await showDialog<_StopAction>(
+      context: context,
+      builder: (context) {
+        return SimpleDialog(
+          title: Text(stop.stopName),
+          children: [
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(context).pop(_StopAction.favorite),
+              child: const Text('加入最愛'),
+            ),
+            if (defaultTargetPlatform == TargetPlatform.android)
+              SimpleDialogOption(
+                onPressed: () =>
+                    Navigator.of(context).pop(_StopAction.shortcut),
+                child: const Text('新增到主畫面'),
+              ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+          ],
+        );
+      },
+    );
+    if (!mounted || action == null) {
+      return;
+    }
+
+    if (action == _StopAction.favorite) {
+      await _handleFavorite(stop);
+    } else if (action == _StopAction.shortcut) {
+      await _handlePinnedShortcut(stop);
+    }
   }
 
   Future<String?> _showGroupPicker(List<String> groups) {
@@ -728,7 +787,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
-        onTap: () => unawaited(_openStopActions(stop)),
+        onTap: () => unawaited(_openStopActionsWithShortcut(stop)),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
           child: Row(
@@ -959,4 +1018,4 @@ class _RouteStatusPill extends StatelessWidget {
   }
 }
 
-enum _StopAction { favorite }
+enum _StopAction { favorite, shortcut }

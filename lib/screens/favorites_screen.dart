@@ -10,7 +10,9 @@ import 'favorite_groups_screen.dart';
 import 'route_detail_screen.dart';
 
 class FavoritesScreen extends StatefulWidget {
-  const FavoritesScreen({super.key});
+  const FavoritesScreen({this.initialGroupName, super.key});
+
+  final String? initialGroupName;
 
   @override
   State<FavoritesScreen> createState() => _FavoritesScreenState();
@@ -67,7 +69,7 @@ class _FavoritesScreenState extends State<FavoritesScreen>
     }
 
     final initialIndex = _tabController == null
-        ? 0
+        ? _resolveInitialGroupIndex(groups)
         : _tabController!.index.clamp(0, groups.length - 1);
     if (_tabController?.length == groups.length) {
       if (_tabController!.index != initialIndex) {
@@ -89,6 +91,15 @@ class _FavoritesScreenState extends State<FavoritesScreen>
       setState(() {});
       _scheduleRefresh(forceResolveStatic: true);
     });
+  }
+
+  int _resolveInitialGroupIndex(List<String> groups) {
+    final initialGroupName = widget.initialGroupName;
+    if (initialGroupName == null) {
+      return 0;
+    }
+    final index = groups.indexOf(initialGroupName);
+    return index == -1 ? 0 : index;
   }
 
   String? _currentGroupName(List<String> groups) {

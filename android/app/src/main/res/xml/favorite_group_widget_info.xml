@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:configure="tw.avianjay.taiwanbus.flutter.FavoriteGroupWidgetConfigureActivity"
+    android:initialLayout="@layout/favorite_group_widget"
+    android:minHeight="120dp"
+    android:minWidth="240dp"
+    android:previewLayout="@layout/favorite_group_widget"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen" />

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'android_home_integration.dart';
 import 'app_build_info.dart';
 import 'app_update_installer.dart';
 import 'app_update_service.dart';
@@ -268,6 +269,7 @@ class AppController extends ChangeNotifier {
 
     _favoriteGroups = {..._favoriteGroups, trimmed: <FavoriteStop>[]};
     await storage.saveFavoriteGroups(_favoriteGroups);
+    await AndroidHomeIntegration.refreshFavoriteWidgets();
     notifyListeners();
   }
 
@@ -276,6 +278,7 @@ class AppController extends ChangeNotifier {
     next.remove(name);
     _favoriteGroups = next;
     await storage.saveFavoriteGroups(_favoriteGroups);
+    await AndroidHomeIntegration.refreshFavoriteWidgets();
     notifyListeners();
   }
 
@@ -303,6 +306,7 @@ class AppController extends ChangeNotifier {
 
     _favoriteGroups = next;
     await storage.saveFavoriteGroups(_favoriteGroups);
+    await AndroidHomeIntegration.refreshFavoriteWidgets();
     notifyListeners();
     return targetGroup;
   }
@@ -318,6 +322,7 @@ class AppController extends ChangeNotifier {
     next[groupName]?.removeWhere((item) => item.sameAs(favorite));
     _favoriteGroups = next;
     await storage.saveFavoriteGroups(_favoriteGroups);
+    await AndroidHomeIntegration.refreshFavoriteWidgets();
     notifyListeners();
   }
 
@@ -325,7 +330,73 @@ class AppController extends ChangeNotifier {
     return List.unmodifiable(_favoriteGroups[groupName] ?? const []);
   }
 
-  Future<List<FavoriteResolvedItem>> resolveFavoriteGroup(String groupName) {
-    return repository.resolveFavoriteGroup(favoritesInGroup(groupName));
+  Future<List<FavoriteResolvedItem>> resolveFavoriteGroup(
+    String groupName,
+  ) async {
+    final items = await repository.resolveFavoriteGroup(
+      favoritesInGroup(groupName),
+    );
+    await _persistFavoriteMetadata(groupName, items);
+    return items;
+  }
+
+  Future<void> _persistFavoriteMetadata(
+    String groupName,
+    List<FavoriteResolvedItem> items,
+  ) async {
+    final current = _favoriteGroups[groupName];
+    if (current == null || current.isEmpty || items.isEmpty) {
+      return;
+    }
+
+    final resolvedByKey = <String, FavoriteResolvedItem>{
+      for (final item in items)
+        '${item.reference.provider.name}:'
+                '${item.reference.routeKey}:'
+                '${item.reference.pathId}:'
+                '${item.reference.stopId}':
+            item,
+    };
+
+    var didChange = false;
+    final updatedGroup = current.map((favorite) {
+      final resolved =
+          resolvedByKey['${favorite.provider.name}:'
+              '${favorite.routeKey}:'
+              '${favorite.pathId}:'
+              '${favorite.stopId}'];
+      if (resolved == null) {
+        return favorite;
+      }
+
+      final nextRouteName = favorite.routeName?.trim().isNotEmpty == true
+          ? favorite.routeName
+          : resolved.route.routeName;
+      final nextStopName = favorite.stopName?.trim().isNotEmpty == true
+          ? favorite.stopName
+          : resolved.stop.stopName;
+
+      if (nextRouteName == favorite.routeName &&
+          nextStopName == favorite.stopName) {
+        return favorite;
+      }
+
+      didChange = true;
+      return FavoriteStop(
+        provider: favorite.provider,
+        routeKey: favorite.routeKey,
+        pathId: favorite.pathId,
+        stopId: favorite.stopId,
+        routeName: nextRouteName,
+        stopName: nextStopName,
+      );
+    }).toList();
+
+    if (!didChange) {
+      return;
+    }
+
+    _favoriteGroups = {..._favoriteGroups, groupName: updatedGroup};
+    await storage.saveFavoriteGroups(_favoriteGroups);
   }
 }

@@ -1,9 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/app_controller.dart';
+import '../core/app_launch_service.dart';
 import '../core/models.dart';
+import '../screens/favorites_screen.dart';
 import '../screens/home_screen.dart';
 import '../screens/onboarding_screen.dart';
+import '../screens/route_detail_screen.dart';
 import '../widgets/app_update_dialog.dart';
 
 class BusApp extends StatelessWidget {
@@ -92,17 +97,37 @@ class _AppHome extends StatefulWidget {
 
 class _AppHomeState extends State<_AppHome> {
   bool _startupCheckScheduled = false;
+  AppLaunchAction? _pendingLaunchAction;
+  StreamSubscription<AppLaunchAction>? _launchSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _pendingLaunchAction = AppLaunchService.instance.takePendingInitialAction();
+    _launchSubscription = AppLaunchService.instance.actions.listen((action) {
+      _pendingLaunchAction = action;
+      _maybeScheduleLaunchAction();
+    });
+  }
+
+  @override
+  void dispose() {
+    _launchSubscription?.cancel();
+    super.dispose();
+  }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _maybeScheduleStartupCheck();
+    _maybeScheduleLaunchAction();
   }
 
   @override
   void didUpdateWidget(covariant _AppHome oldWidget) {
     super.didUpdateWidget(oldWidget);
     _maybeScheduleStartupCheck();
+    _maybeScheduleLaunchAction();
   }
 
   void _maybeScheduleStartupCheck() {
@@ -114,6 +139,49 @@ class _AppHomeState extends State<_AppHome> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _runStartupCheck();
     });
+  }
+
+  void _maybeScheduleLaunchAction() {
+    if (_pendingLaunchAction == null || widget.controller.needsOnboarding) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _consumeLaunchAction();
+    });
+  }
+
+  Future<void> _consumeLaunchAction() async {
+    final action = _pendingLaunchAction;
+    if (!mounted || action == null) {
+      return;
+    }
+    _pendingLaunchAction = null;
+
+    switch (action.target) {
+      case AppLaunchTarget.routeDetail:
+        final provider = action.provider;
+        final routeKey = action.routeKey;
+        if (provider == null || routeKey == null) {
+          return;
+        }
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => RouteDetailScreen(
+              routeKey: routeKey,
+              provider: provider,
+              initialPathId: action.pathId,
+              initialStopId: action.stopId,
+            ),
+          ),
+        );
+      case AppLaunchTarget.favoritesGroup:
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => FavoritesScreen(initialGroupName: action.groupName),
+          ),
+        );
+    }
   }
 
   Future<void> _runStartupCheck() async {
