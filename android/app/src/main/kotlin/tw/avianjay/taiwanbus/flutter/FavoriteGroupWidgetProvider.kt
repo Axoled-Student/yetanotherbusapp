@@ -9,12 +9,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
+import android.text.format.DateFormat
 import android.view.View
 import android.widget.RemoteViews
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Date
 import java.util.concurrent.Executors
 import java.util.zip.InflaterInputStream
 import javax.xml.parsers.DocumentBuilderFactory
@@ -28,6 +30,7 @@ class FavoriteGroupWidgetProvider : AppWidgetProvider() {
         appWidgetManager: AppWidgetManager,
         appWidgetIds: IntArray,
     ) {
+        FavoriteWidgetRefreshScheduler.syncFromPreferences(context)
         FavoriteGroupWidgetSupport.updateWidgetsAsync(context, appWidgetIds)
     }
 
@@ -59,6 +62,7 @@ class FavoriteGroupWidgetProvider : AppWidgetProvider() {
         appWidgetIds.forEach { appWidgetId ->
             FavoriteGroupWidgetSupport.deleteConfiguredGroup(context, appWidgetId)
         }
+        FavoriteWidgetRefreshScheduler.syncFromPreferences(context)
     }
 }
 
@@ -68,6 +72,7 @@ object FavoriteGroupWidgetSupport {
 
     private const val WIDGET_PREFERENCES_NAME = "favorite_group_widget"
     private const val WIDGET_GROUP_KEY_PREFIX = "group_"
+    private const val WIDGET_LAST_UPDATED_KEY_PREFIX = "last_updated_"
     private const val FLUTTER_PREFERENCES_NAME = "FlutterSharedPreferences"
     private const val FAVORITE_GROUPS_KEY = "flutter.favorite_groups"
     private const val FAVORITE_GROUPS_FALLBACK_KEY = "favorite_groups"
@@ -87,7 +92,11 @@ object FavoriteGroupWidgetSupport {
     }
 
     fun deleteConfiguredGroup(context: Context, appWidgetId: Int) {
-        widgetPreferences(context).edit().remove(widgetGroupKey(appWidgetId)).apply()
+        widgetPreferences(context)
+            .edit()
+            .remove(widgetGroupKey(appWidgetId))
+            .remove(widgetLastUpdatedKey(appWidgetId))
+            .apply()
     }
 
     fun loadFavoriteGroupNames(context: Context): List<String> {
@@ -123,45 +132,69 @@ object FavoriteGroupWidgetSupport {
 
         executor.execute {
             try {
-                appWidgetIds.forEach { appWidgetId ->
-                    updateWidget(appContext, appWidgetManager, appWidgetId)
-                }
+                updateWidgetsNow(appContext, appWidgetIds)
             } finally {
                 pendingResult?.finish()
             }
         }
     }
 
-    private fun updateWidget(
+    fun updateWidgetsNow(
         context: Context,
-        appWidgetManager: AppWidgetManager,
-        appWidgetId: Int,
+        appWidgetIds: IntArray,
     ) {
+        val appWidgetManager = AppWidgetManager.getInstance(context)
+        appWidgetIds.forEach { appWidgetId ->
+            val renderResult = buildWidgetRenderResult(context, appWidgetId)
+            if (renderResult.updateTimestamp) {
+                val timestamp = System.currentTimeMillis()
+                saveLastUpdated(context, appWidgetId, timestamp)
+                renderResult.views.setTextViewText(
+                    R.id.favorite_widget_updated_at,
+                    formatLastUpdated(context, timestamp),
+                )
+            }
+            appWidgetManager.updateAppWidget(
+                appWidgetId,
+                renderResult.views,
+            )
+        }
+    }
+
+    private fun buildWidgetRenderResult(
+        context: Context,
+        appWidgetId: Int,
+    ): WidgetRenderResult {
         val groupName = loadConfiguredGroup(context, appWidgetId)
-        val views = when {
+        return when {
             groupName.isNullOrBlank() -> {
-                buildBaseRemoteViews(context, appWidgetId, "YABus").apply {
-                    setViewVisibility(R.id.favorite_widget_empty, View.VISIBLE)
-                    setTextViewText(R.id.favorite_widget_empty, "Tap to configure this widget.")
-                }
+                WidgetRenderResult(
+                    views = buildBaseRemoteViews(context, appWidgetId, "YABus").apply {
+                        setViewVisibility(R.id.favorite_widget_empty, View.VISIBLE)
+                        setTextViewText(R.id.favorite_widget_empty, "Tap to configure this widget.")
+                    },
+                    updateTimestamp = false,
+                )
             }
 
             else -> {
                 val items = loadFavoriteGroups(context)[groupName]
                 if (items == null) {
-                    buildBaseRemoteViews(context, appWidgetId, groupName).apply {
-                        setViewVisibility(R.id.favorite_widget_empty, View.VISIBLE)
-                        setTextViewText(
-                            R.id.favorite_widget_empty,
-                            "This favorite group no longer exists.",
-                        )
-                    }
+                    WidgetRenderResult(
+                        views = buildBaseRemoteViews(context, appWidgetId, groupName).apply {
+                            setViewVisibility(R.id.favorite_widget_empty, View.VISIBLE)
+                            setTextViewText(
+                                R.id.favorite_widget_empty,
+                                "This favorite group no longer exists.",
+                            )
+                        },
+                        updateTimestamp = false,
+                    )
                 } else {
                     buildContentRemoteViews(context, appWidgetId, groupName, items)
                 }
             }
         }
-        appWidgetManager.updateAppWidget(appWidgetId, views)
     }
 
     private fun buildLoadingRemoteViews(context: Context, appWidgetId: Int): RemoteViews {
@@ -177,17 +210,22 @@ object FavoriteGroupWidgetSupport {
         appWidgetId: Int,
         groupName: String,
         items: List<FavoriteWidgetItem>,
-    ): RemoteViews {
+    ): WidgetRenderResult {
         val views = buildBaseRemoteViews(context, appWidgetId, groupName)
         if (items.isEmpty()) {
             views.setViewVisibility(R.id.favorite_widget_empty, View.VISIBLE)
-            views.setTextViewText(R.id.favorite_widget_empty, "空空如也")
-            return views
+            views.setTextViewText(R.id.favorite_widget_empty, "No favorite stops in this group.")
+            return WidgetRenderResult(views, updateTimestamp = true)
         }
 
         val liveStopsByRoute = linkedMapOf<String, Map<Int, WidgetLiveStop>>()
+        var successfulRouteFetches = 0
         items.associateBy(::routeRequestKey).forEach { (requestKey, item) ->
-            liveStopsByRoute[requestKey] = fetchLiveStopMap(item.routeKey)
+            val fetchResult = fetchLiveStopMap(item.routeKey)
+            if (fetchResult.success) {
+                successfulRouteFetches += 1
+            }
+            liveStopsByRoute[requestKey] = fetchResult.liveStops
         }
 
         views.removeAllViews(R.id.favorite_widget_items_container)
@@ -200,11 +238,11 @@ object FavoriteGroupWidgetSupport {
             )
             itemViews.setTextViewText(
                 R.id.favorite_widget_item_route,
-                item.routeName.ifBlank { "路線 ${item.routeKey}" },
+                item.routeName.ifBlank { "Route ${item.routeKey}" },
             )
             itemViews.setTextViewText(
                 R.id.favorite_widget_item_stop,
-                item.stopName.ifBlank { "站牌 ${item.stopId}" },
+                item.stopName.ifBlank { "Stop ${item.stopId}" },
             )
             itemViews.setTextViewText(
                 R.id.favorite_widget_item_note,
@@ -217,7 +255,10 @@ object FavoriteGroupWidgetSupport {
             views.addView(R.id.favorite_widget_items_container, itemViews)
         }
 
-        return views
+        return WidgetRenderResult(
+            views = views,
+            updateTimestamp = successfulRouteFetches > 0,
+        )
     }
 
     private fun buildBaseRemoteViews(
@@ -227,6 +268,10 @@ object FavoriteGroupWidgetSupport {
     ): RemoteViews {
         return RemoteViews(context.packageName, R.layout.favorite_group_widget).apply {
             setTextViewText(R.id.favorite_widget_title, title)
+            setTextViewText(
+                R.id.favorite_widget_updated_at,
+                formatLastUpdated(context, loadLastUpdated(context, appWidgetId)),
+            )
             setOnClickPendingIntent(
                 R.id.favorite_widget_header,
                 createOpenFavoritesPendingIntent(context, appWidgetId, title),
@@ -336,7 +381,7 @@ object FavoriteGroupWidgetSupport {
         return result
     }
 
-    private fun fetchLiveStopMap(routeKey: Int): Map<Int, WidgetLiveStop> {
+    private fun fetchLiveStopMap(routeKey: Int): WidgetRouteFetchResult {
         val connection = URL("https://busserver.bus.yahoo.com/api/route/$routeKey")
             .openConnection() as HttpURLConnection
         connection.connectTimeout = 10_000
@@ -347,12 +392,15 @@ object FavoriteGroupWidgetSupport {
 
         return try {
             if (connection.responseCode !in 200..299) {
-                return emptyMap()
+                return WidgetRouteFetchResult(success = false, liveStops = emptyMap())
             }
             val xmlText = decodeZlib(connection.inputStream)
-            parseLiveStopMap(xmlText)
+            WidgetRouteFetchResult(
+                success = true,
+                liveStops = parseLiveStopMap(xmlText),
+            )
         } catch (_: Exception) {
-            emptyMap()
+            WidgetRouteFetchResult(success = false, liveStops = emptyMap())
         } finally {
             connection.disconnect()
         }
@@ -406,8 +454,34 @@ object FavoriteGroupWidgetSupport {
         return "${seconds / 60}分"
     }
 
+    private fun formatLastUpdated(
+        context: Context,
+        timestamp: Long?,
+    ): String {
+        if (timestamp == null) {
+            return "上次更新 --"
+        }
+        val formatter = DateFormat.getTimeFormat(context)
+        return "上次更新 ${formatter.format(Date(timestamp))}"
+    }
+
     private fun routeRequestKey(item: FavoriteWidgetItem): String {
         return "${item.provider}:${item.routeKey}"
+    }
+
+    private fun saveLastUpdated(context: Context, appWidgetId: Int, timestamp: Long) {
+        widgetPreferences(context)
+            .edit()
+            .putLong(widgetLastUpdatedKey(appWidgetId), timestamp)
+            .apply()
+    }
+
+    private fun loadLastUpdated(context: Context, appWidgetId: Int): Long? {
+        val preferences = widgetPreferences(context)
+        if (!preferences.contains(widgetLastUpdatedKey(appWidgetId))) {
+            return null
+        }
+        return preferences.getLong(widgetLastUpdatedKey(appWidgetId), 0L)
     }
 
     private fun widgetPreferences(context: Context): SharedPreferences {
@@ -416,6 +490,10 @@ object FavoriteGroupWidgetSupport {
 
     private fun widgetGroupKey(appWidgetId: Int): String {
         return "$WIDGET_GROUP_KEY_PREFIX$appWidgetId"
+    }
+
+    private fun widgetLastUpdatedKey(appWidgetId: Int): String {
+        return "$WIDGET_LAST_UPDATED_KEY_PREFIX$appWidgetId"
     }
 }
 
@@ -432,4 +510,14 @@ data class WidgetLiveStop(
     val sec: Int?,
     val msg: String?,
     val vehicleId: String?,
+)
+
+data class WidgetRouteFetchResult(
+    val success: Boolean,
+    val liveStops: Map<Int, WidgetLiveStop>,
+)
+
+data class WidgetRenderResult(
+    val views: RemoteViews,
+    val updateTimestamp: Boolean,
 )

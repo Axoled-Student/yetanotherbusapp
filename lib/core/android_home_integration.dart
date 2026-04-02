@@ -35,4 +35,15 @@ class AndroidHomeIntegration {
     }
     await _channel.invokeMethod<void>('refreshFavoriteWidgets');
   }
+
+  static Future<void> updateFavoriteWidgetAutoRefreshMinutes(
+    int minutes,
+  ) async {
+    if (!_isAndroid) {
+      return;
+    }
+    await _channel.invokeMethod<void>('setFavoriteWidgetAutoRefreshMinutes', {
+      'minutes': minutes,
+    });
+  }
 }

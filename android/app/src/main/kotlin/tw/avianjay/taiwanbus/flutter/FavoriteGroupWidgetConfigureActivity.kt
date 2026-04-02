@@ -54,6 +54,7 @@ class FavoriteGroupWidgetConfigureActivity : Activity() {
 
     private fun completeConfiguration(groupName: String) {
         FavoriteGroupWidgetSupport.saveConfiguredGroup(this, appWidgetId, groupName)
+        FavoriteWidgetRefreshScheduler.syncFromPreferences(applicationContext)
         FavoriteGroupWidgetSupport.updateWidgetsAsync(
             context = applicationContext,
             appWidgetIds = intArrayOf(appWidgetId),

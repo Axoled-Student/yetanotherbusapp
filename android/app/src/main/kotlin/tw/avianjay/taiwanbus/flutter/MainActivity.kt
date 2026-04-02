@@ -74,6 +74,12 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
 
+                "setFavoriteWidgetAutoRefreshMinutes" -> {
+                    val minutes = call.argument<Int>("minutes") ?: 0
+                    FavoriteWidgetRefreshScheduler.sync(this, minutes)
+                    result.success(null)
+                }
+
                 else -> result.notImplemented()
             }
         }

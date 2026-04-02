@@ -41,6 +41,15 @@
     </LinearLayout>
 
     <TextView
+        android:id="@+id/favorite_widget_updated_at"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="上次更新 --"
+        android:textColor="#8FA6C8"
+        android:textSize="11sp" />
+
+    <TextView
         android:id="@+id/favorite_widget_empty"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

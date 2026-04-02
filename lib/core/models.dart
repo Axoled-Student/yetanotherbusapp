@@ -113,6 +113,7 @@ class AppSettings {
     required this.themeMode,
     required this.alwaysShowSeconds,
     required this.keepScreenAwakeOnRouteDetail,
+    required this.favoriteWidgetAutoRefreshMinutes,
     required this.busUpdateTime,
     required this.busErrorUpdateTime,
     required this.maxHistory,
@@ -127,6 +128,7 @@ class AppSettings {
       themeMode: ThemeMode.system,
       alwaysShowSeconds: false,
       keepScreenAwakeOnRouteDetail: true,
+      favoriteWidgetAutoRefreshMinutes: 0,
       busUpdateTime: 10,
       busErrorUpdateTime: 3,
       maxHistory: 10,
@@ -150,6 +152,8 @@ class AppSettings {
       alwaysShowSeconds: json['alwaysShowSeconds'] as bool? ?? false,
       keepScreenAwakeOnRouteDetail:
           json['keepScreenAwakeOnRouteDetail'] as bool? ?? true,
+      favoriteWidgetAutoRefreshMinutes:
+          json['favoriteWidgetAutoRefreshMinutes'] as int? ?? 0,
       busUpdateTime: json['busUpdateTime'] as int? ?? 10,
       busErrorUpdateTime: json['busErrorUpdateTime'] as int? ?? 3,
       maxHistory: json['maxHistory'] as int? ?? 10,
@@ -178,6 +182,7 @@ class AppSettings {
   final ThemeMode themeMode;
   final bool alwaysShowSeconds;
   final bool keepScreenAwakeOnRouteDetail;
+  final int favoriteWidgetAutoRefreshMinutes;
   final int busUpdateTime;
   final int busErrorUpdateTime;
   final int maxHistory;
@@ -190,6 +195,7 @@ class AppSettings {
     ThemeMode? themeMode,
     bool? alwaysShowSeconds,
     bool? keepScreenAwakeOnRouteDetail,
+    int? favoriteWidgetAutoRefreshMinutes,
     int? busUpdateTime,
     int? busErrorUpdateTime,
     int? maxHistory,
@@ -203,6 +209,9 @@ class AppSettings {
       alwaysShowSeconds: alwaysShowSeconds ?? this.alwaysShowSeconds,
       keepScreenAwakeOnRouteDetail:
           keepScreenAwakeOnRouteDetail ?? this.keepScreenAwakeOnRouteDetail,
+      favoriteWidgetAutoRefreshMinutes:
+          favoriteWidgetAutoRefreshMinutes ??
+          this.favoriteWidgetAutoRefreshMinutes,
       busUpdateTime: busUpdateTime ?? this.busUpdateTime,
       busErrorUpdateTime: busErrorUpdateTime ?? this.busErrorUpdateTime,
       maxHistory: maxHistory ?? this.maxHistory,
@@ -219,6 +228,7 @@ class AppSettings {
       'themeMode': themeMode.name,
       'alwaysShowSeconds': alwaysShowSeconds,
       'keepScreenAwakeOnRouteDetail': keepScreenAwakeOnRouteDetail,
+      'favoriteWidgetAutoRefreshMinutes': favoriteWidgetAutoRefreshMinutes,
       'busUpdateTime': busUpdateTime,
       'busErrorUpdateTime': busErrorUpdateTime,
       'maxHistory': maxHistory,

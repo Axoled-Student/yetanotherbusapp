@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../app/bus_app.dart';
@@ -7,6 +8,15 @@ import '../widgets/app_update_dialog.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
+
+  static const _favoriteWidgetRefreshOptions = <int>[0, 15, 30, 60, 120, 180];
+
+  String _favoriteWidgetRefreshLabel(int minutes) {
+    if (minutes <= 0) {
+      return '關閉';
+    }
+    return '$minutes 分鐘';
+  }
 
   Future<void> _checkAppUpdate(
     BuildContext context,
@@ -211,6 +221,33 @@ class SettingsScreen extends StatelessWidget {
                     value: controller.settings.keepScreenAwakeOnRouteDetail,
                     onChanged: controller.updateKeepScreenAwakeOnRouteDetail,
                   ),
+                  if (!kIsWeb &&
+                      defaultTargetPlatform == TargetPlatform.android) ...[
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<int>(
+                      initialValue:
+                          controller.settings.favoriteWidgetAutoRefreshMinutes,
+                      decoration: const InputDecoration(
+                        labelText: '最愛小工具背景更新',
+                        helperText: 'Android 背景排程最低 15 分鐘一次',
+                      ),
+                      items: _favoriteWidgetRefreshOptions
+                          .map(
+                            (minutes) => DropdownMenuItem(
+                              value: minutes,
+                              child: Text(_favoriteWidgetRefreshLabel(minutes)),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          controller.updateFavoriteWidgetAutoRefreshMinutes(
+                            value,
+                          );
+                        }
+                      },
+                    ),
+                  ],
                   const SizedBox(height: 8),
                   Text('正常更新間隔：${controller.settings.busUpdateTime} 秒'),
                   Slider(

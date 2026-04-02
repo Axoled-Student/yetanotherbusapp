@@ -53,6 +53,9 @@ class AppController extends ChangeNotifier {
     _settings = await storage.loadSettings();
     _history = await storage.loadHistory();
     _favoriteGroups = await storage.loadFavoriteGroups();
+    await AndroidHomeIntegration.updateFavoriteWidgetAutoRefreshMinutes(
+      _settings.favoriteWidgetAutoRefreshMinutes,
+    );
     await refreshDatabaseState();
     _initialized = true;
     notifyListeners();
@@ -91,6 +94,13 @@ class AppController extends ChangeNotifier {
   Future<void> updateKeepScreenAwakeOnRouteDetail(bool value) async {
     _settings = _settings.copyWith(keepScreenAwakeOnRouteDetail: value);
     await storage.saveSettings(_settings);
+    notifyListeners();
+  }
+
+  Future<void> updateFavoriteWidgetAutoRefreshMinutes(int value) async {
+    _settings = _settings.copyWith(favoriteWidgetAutoRefreshMinutes: value);
+    await storage.saveSettings(_settings);
+    await AndroidHomeIntegration.updateFavoriteWidgetAutoRefreshMinutes(value);
     notifyListeners();
   }
 
