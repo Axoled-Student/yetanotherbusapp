@@ -29,8 +29,8 @@ class FavoriteGroupWidgetConfigureActivity : Activity() {
         val groups = FavoriteGroupWidgetSupport.loadFavoriteGroupNames(this)
         if (groups.isEmpty()) {
             AlertDialog.Builder(this)
-                .setTitle("No favorite groups")
-                .setMessage("Create a favorite group in YABus first.")
+                .setTitle("沒有可用的最愛類別")
+                .setMessage("請先創建一個我的最愛類別。")
                 .setPositiveButton(android.R.string.ok) { _, _ ->
                     finish()
                 }
@@ -42,7 +42,7 @@ class FavoriteGroupWidgetConfigureActivity : Activity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Choose a favorite group")
+            .setTitle("選擇一個我的最愛群組")
             .setItems(groups.toTypedArray()) { _, which ->
                 completeConfiguration(groups[which])
             }

@@ -181,7 +181,7 @@ object FavoriteGroupWidgetSupport {
         val views = buildBaseRemoteViews(context, appWidgetId, groupName)
         if (items.isEmpty()) {
             views.setViewVisibility(R.id.favorite_widget_empty, View.VISIBLE)
-            views.setTextViewText(R.id.favorite_widget_empty, "No favorite stops in this group.")
+            views.setTextViewText(R.id.favorite_widget_empty, "空空如也")
             return views
         }
 
@@ -200,11 +200,11 @@ object FavoriteGroupWidgetSupport {
             )
             itemViews.setTextViewText(
                 R.id.favorite_widget_item_route,
-                item.routeName.ifBlank { "Route ${item.routeKey}" },
+                item.routeName.ifBlank { "路線 ${item.routeKey}" },
             )
             itemViews.setTextViewText(
                 R.id.favorite_widget_item_stop,
-                item.stopName.ifBlank { "Stop ${item.stopId}" },
+                item.stopName.ifBlank { "站牌 ${item.stopId}" },
             )
             itemViews.setTextViewText(
                 R.id.favorite_widget_item_note,
