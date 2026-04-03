@@ -655,7 +655,9 @@ class RouteTripMonitorService : Service() {
                 ).build(),
             )
 
-        builder.setShortCriticalText(snapshot.shortCriticalText ?: "更新中")
+        snapshot.shortCriticalText
+            ?.takeIf { it.isNotBlank() }
+            ?.let(builder::setShortCriticalText)
 
         requestPromotedOngoing(builder)
         val progressMax = snapshot.progressMax
@@ -714,7 +716,9 @@ class RouteTripMonitorService : Service() {
                 ).build(),
             )
 
-        builder.setShortCriticalText(snapshot.shortCriticalText ?: "更新中")
+        snapshot.shortCriticalText
+            ?.takeIf { it.isNotBlank() }
+            ?.let(builder::setShortCriticalText)
 
         requestPromotedOngoing(builder)
         val progressMax = snapshot.progressMax
@@ -1198,19 +1202,32 @@ class RouteTripMonitorService : Service() {
         }
     }
 
-    private fun buildShortCriticalText(stopsAway: Int?, etaText: String): String {
+    private fun buildShortCriticalText(stopsAway: Int?, etaText: String): String? {
+        val cleanEtaText = cleanStandaloneShortEtaText(etaText)
+        if (stopsAway == null) {
+            return cleanEtaText
+        }
+
         val left = when (stopsAway) {
-            null -> null
             0 -> "到站"
             else -> "${stopsAway}站"
         }
         val compact = when {
-            left == null && etaText == "--" -> "更新中"
-            left == null -> etaText
-            etaText == "--" -> left
-            else -> "$left|$etaText"
+            cleanEtaText == null -> left
+            else -> "$left|$cleanEtaText"
         }
         return compact.take(7)
+    }
+
+    private fun cleanStandaloneShortEtaText(etaText: String): String? {
+        val trimmed = etaText.trim()
+        if (trimmed.isEmpty() || trimmed == "--") {
+            return null
+        }
+        if (trimmed.startsWith("<") || trimmed.endsWith("分")) {
+            return trimmed.take(7)
+        }
+        return null
     }
 
     private fun buildLegacyShortCriticalText(stopsAway: Int?, etaText: String): String? {
