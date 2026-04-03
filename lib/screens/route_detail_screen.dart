@@ -1163,7 +1163,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     if (isDestination) {
       return _RouteStatusPill(
         icon: Icons.flag_rounded,
-        label: 'Destination',
+        label: '下車站',
         backgroundColor: theme.colorScheme.tertiaryContainer,
         foregroundColor: theme.colorScheme.onTertiaryContainer,
       );
