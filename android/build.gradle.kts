@@ -12,8 +12,13 @@ val newBuildDir: Directory =
 rootProject.layout.buildDirectory.value(newBuildDir)
 
 subprojects {
-    val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
-    project.layout.buildDirectory.value(newSubprojectBuildDir)
+    // AGP 8.11 computes relative paths for some generated test config files.
+    // Keep external Flutter plugins on their native drive to avoid
+    // cross-drive relative path failures on Windows.
+    if (project.projectDir.toPath().root == newBuildDir.asFile.toPath().root) {
+        val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
+        project.layout.buildDirectory.value(newSubprojectBuildDir)
+    }
 }
 subprojects {
     project.evaluationDependsOn(":app")
