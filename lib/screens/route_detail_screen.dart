@@ -51,6 +51,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   bool _awaitingBackgroundLocationPermission = false;
   bool _destinationPromptShown = false;
   int? _targetInitialPathId;
+  int? _boardingStopId;
+  String? _boardingStopName;
   int? _destinationStopId;
   String? _destinationStopName;
   AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
@@ -252,6 +254,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
           _currentPathStops.every(
             (stop) => stop.stopId != _destinationStopId,
           )) {
+        _boardingStopId = null;
+        _boardingStopName = null;
         _destinationStopId = null;
         _destinationStopName = null;
       }
@@ -614,6 +618,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     if (_destinationStopId != null &&
         pathStops.every((stop) => stop.stopId != _destinationStopId)) {
       setState(() {
+        _boardingStopId = null;
+        _boardingStopName = null;
         _destinationStopId = null;
         _destinationStopName = null;
       });
@@ -627,6 +633,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
         pathId: pathInfo.pathId,
         pathName: pathInfo.name,
         appInForeground: _appIsForeground,
+        boardingStopId: _boardingStopId,
+        boardingStopName: _boardingStopName,
         destinationStopId: _destinationStopId,
         destinationStopName: _destinationStopName,
         initialLatitude: _lastPosition?.latitude,
@@ -749,7 +757,10 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   }
 
   Future<void> _setDestinationStop(StopInfo stop) async {
+    final boardingStop = _currentBoardingCandidateStop();
     setState(() {
+      _boardingStopId = boardingStop?.stopId;
+      _boardingStopName = boardingStop?.stopName;
       _destinationStopId = stop.stopId;
       _destinationStopName = stop.stopName;
     });
@@ -767,6 +778,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       return;
     }
     setState(() {
+      _boardingStopId = null;
+      _boardingStopName = null;
       _destinationStopId = null;
       _destinationStopName = null;
     });
@@ -878,8 +891,35 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       setState(() {
         _nearestStopByPath = nearestByPath;
       });
+      if (_destinationStopId != null && _boardingStopId == null) {
+        final boardingStop = _currentBoardingCandidateStop();
+        if (boardingStop != null) {
+          setState(() {
+            _boardingStopId = boardingStop.stopId;
+            _boardingStopName = boardingStop.stopName;
+          });
+          unawaited(_configureBackgroundTripMonitorIfNeeded());
+        }
+      }
     }
     _maybeScrollToCurrentLocation();
+  }
+
+  StopInfo? _currentBoardingCandidateStop() {
+    final pathId = _currentPathId;
+    if (pathId == null) {
+      return null;
+    }
+    final nearestStopId = _nearestStopByPath[pathId];
+    if (nearestStopId == null) {
+      return null;
+    }
+    for (final stop in _currentPathStops) {
+      if (stop.stopId == nearestStopId) {
+        return stop;
+      }
+    }
+    return null;
   }
 
   void _maybeScrollToCurrentLocation() {

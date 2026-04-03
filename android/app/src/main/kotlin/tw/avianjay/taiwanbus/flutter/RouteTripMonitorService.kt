@@ -46,6 +46,7 @@ class RouteTripMonitorService : Service() {
     private var appInForeground = true
     private var foregroundStarted = false
     private var latestLocation: Location? = null
+    private var boardingAlertSent = false
     private var destinationAlertStage = 0
 
     private val pollingRunnable = object : Runnable {
@@ -96,9 +97,14 @@ class RouteTripMonitorService : Service() {
                 }
 
                 val previousDestination = session?.destinationStopId
+                val previousBoarding = session?.boardingStopId
                 session = parsedSession
                 appInForeground = parsedSession.appInForeground
-                if (previousDestination != parsedSession.destinationStopId) {
+                if (
+                    previousDestination != parsedSession.destinationStopId ||
+                    previousBoarding != parsedSession.boardingStopId
+                ) {
+                    boardingAlertSent = false
                     destinationAlertStage = 0
                 }
                 latestLocation = parsedSession.initialLatitude?.let { latitude ->
@@ -195,11 +201,155 @@ class RouteTripMonitorService : Service() {
             val trackingSnapshot = buildSnapshot(currentSession, latestLocation)
             val notification = buildTrackingNotification(trackingSnapshot)
             notificationManager.notify(TRACKING_NOTIFICATION_ID, notification)
-            maybeSendDestinationAlert(currentSession, trackingSnapshot)
+            maybeSendTripAlerts(currentSession, trackingSnapshot)
         }
     }
 
     private fun buildSnapshot(
+        session: TrackingSession,
+        location: Location?,
+    ): TrackingSnapshot {
+        val liveStops = fetchLiveStopMap(session.routeKey)
+        if (location == null) {
+            return TrackingSnapshot(
+                title = session.routeName,
+                content = "等待目前位置...",
+                subText = session.pathName.ifBlank { "背景乘車提醒進行中" },
+                progressMax = null,
+                progressValue = null,
+                shortCriticalText = "定位中",
+            )
+        }
+
+        val nearestIndex = session.stops.indices.minByOrNull { index ->
+            val stop = session.stops[index]
+            distanceMeters(
+                location.latitude,
+                location.longitude,
+                stop.lat,
+                stop.lon,
+            )
+        } ?: -1
+        if (nearestIndex == -1) {
+            return TrackingSnapshot(
+                title = session.routeName,
+                content = "暫時無法判斷最近站牌",
+                subText = session.pathName.ifBlank { "背景乘車提醒進行中" },
+                progressMax = null,
+                progressValue = null,
+                shortCriticalText = "更新中",
+            )
+        }
+
+        val nearestStop = session.stops[nearestIndex]
+        val nearestLiveStop = liveStops[nearestStop.stopId]
+        val nearestEtaText = displayEtaText(nearestLiveStop)
+        val busIndex = findClosestBusIndex(session.stops, liveStops, nearestIndex)
+        val destinationIndex = session.destinationStopId?.let { destinationStopId ->
+            session.stops.indexOfFirst { stop -> stop.stopId == destinationStopId }
+                .takeIf { it >= 0 }
+        }
+
+        if (destinationIndex == null) {
+            val busStopsAway = busIndex?.let { (nearestIndex - it).coerceAtLeast(0) }
+            return TrackingSnapshot(
+                title = session.routeName,
+                content = "${nearestStop.stopName} · $nearestEtaText",
+                subText = buildNearestStatusText(
+                    session = session,
+                    nearestStop = nearestStop,
+                    nearestEtaText = nearestEtaText,
+                    busStopsAway = busStopsAway,
+                ),
+                progressMax = null,
+                progressValue = null,
+                shortCriticalText = buildShortCriticalText(
+                    busStopsAway,
+                    displayShortEtaText(nearestLiveStop),
+                ),
+            )
+        }
+
+        val destinationStop = session.stops[destinationIndex]
+        val boardingIndex = resolveBoardingIndex(session, nearestIndex, destinationIndex)
+        val boardingStop = session.stops[boardingIndex]
+        val boardingLiveStop = liveStops[boardingStop.stopId]
+        val boardingEtaText = displayEtaText(boardingLiveStop)
+        val boardingEtaShort = displayShortEtaText(boardingLiveStop)
+        val boardingDistanceMeters = distanceMeters(
+            location.latitude,
+            location.longitude,
+            boardingStop.lat,
+            boardingStop.lon,
+        )
+        val busStopsUntilBoarding = busIndex?.let { (boardingIndex - it).coerceAtLeast(0) }
+        val hasBoarded = hasBoardedBus(
+            nearestIndex = nearestIndex,
+            boardingIndex = boardingIndex,
+            boardingDistanceMeters = boardingDistanceMeters,
+            busIndex = busIndex,
+        )
+
+        if (!hasBoarded) {
+            val boardingProgressValue = busIndex?.plus(1)?.coerceAtMost(boardingIndex + 1)
+            return TrackingSnapshot(
+                title = "${session.routeName} · ${boardingStop.stopName}",
+                content = "公車到 ${boardingStop.stopName} 約 $boardingEtaText",
+                subText = buildWaitingBoardingText(
+                    session = session,
+                    boardingStop = boardingStop,
+                    destinationStop = destinationStop,
+                    busStopsUntilBoarding = busStopsUntilBoarding,
+                ),
+                progressMax = boardingIndex + 1,
+                progressValue = boardingProgressValue,
+                shortCriticalText = buildShortCriticalText(
+                    busStopsUntilBoarding,
+                    boardingEtaShort,
+                ),
+                boardingName = boardingStop.stopName,
+                boardingEtaText = boardingEtaText,
+                boardingStopsAway = busStopsUntilBoarding,
+                boardingDistanceMeters = boardingDistanceMeters,
+                hasBoarded = false,
+                destinationName = destinationStop.stopName,
+            )
+        }
+
+        val destinationLive = liveStops[destinationStop.stopId]
+        val remainingStops = (destinationIndex - nearestIndex).coerceAtLeast(0)
+        val destinationEtaText = displayEtaText(destinationLive)
+        val destinationEtaShort = displayShortEtaText(destinationLive)
+        val destinationDistanceMeters = distanceMeters(
+            location.latitude,
+            location.longitude,
+            destinationStop.lat,
+            destinationStop.lon,
+        )
+        val currentProgress = (nearestIndex + 1).coerceAtMost(destinationIndex + 1)
+
+        return TrackingSnapshot(
+            title = "${session.routeName} · ${destinationStop.stopName}",
+            content = when {
+                remainingStops == 0 -> "已接近 ${destinationStop.stopName}"
+                else -> "距離 ${destinationStop.stopName} 還有 $remainingStops 站 · $destinationEtaText"
+            },
+            subText = "已上車 · 最近站牌 ${nearestStop.stopName} · $nearestEtaText",
+            progressMax = destinationIndex + 1,
+            progressValue = currentProgress,
+            shortCriticalText = buildShortCriticalText(
+                remainingStops,
+                destinationEtaShort,
+            ),
+            hasBoarded = true,
+            destinationName = destinationStop.stopName,
+            remainingStops = remainingStops,
+            destinationDistanceMeters = destinationDistanceMeters,
+            boardingName = boardingStop.stopName,
+        )
+    }
+
+    private fun buildSnapshotLegacy(
         session: TrackingSession,
         location: Location?,
     ): TrackingSnapshot {
@@ -292,6 +442,129 @@ class RouteTripMonitorService : Service() {
             destinationDistanceMeters = destinationDistanceMeters,
             shortCriticalText = buildShortCriticalText(remainingStops, destinationEtaShort),
         )
+    }
+
+    private fun resolveBoardingIndex(
+        session: TrackingSession,
+        nearestIndex: Int,
+        destinationIndex: Int,
+    ): Int {
+        val explicitBoardingIndex = session.boardingStopId?.let { boardingStopId ->
+            session.stops.indexOfFirst { stop -> stop.stopId == boardingStopId }
+                .takeIf { it >= 0 }
+        }
+        return (explicitBoardingIndex ?: nearestIndex).coerceAtMost(destinationIndex)
+    }
+
+    private fun hasBoardedBus(
+        nearestIndex: Int,
+        boardingIndex: Int,
+        boardingDistanceMeters: Double,
+        busIndex: Int?,
+    ): Boolean {
+        if (nearestIndex >= boardingIndex + 1) {
+            return true
+        }
+        if (nearestIndex >= boardingIndex && boardingDistanceMeters > BOARDING_STOP_RADIUS_METERS) {
+            return true
+        }
+        return busIndex != null &&
+            busIndex > boardingIndex &&
+            boardingDistanceMeters > BOARDING_STOP_RADIUS_METERS
+    }
+
+    private fun buildNearestStatusText(
+        session: TrackingSession,
+        nearestStop: TrackingStop,
+        nearestEtaText: String,
+        busStopsAway: Int?,
+    ): String {
+        val parts = mutableListOf<String>()
+        if (session.pathName.isNotBlank()) {
+            parts += session.pathName
+        }
+        parts += "最近站牌 ${nearestStop.stopName}"
+        if (nearestEtaText != "--") {
+            parts += nearestEtaText
+        }
+        buildBusDistanceSummary(busStopsAway)?.let(parts::add)
+        return parts.joinToString(" · ")
+    }
+
+    private fun buildWaitingBoardingText(
+        session: TrackingSession,
+        boardingStop: TrackingStop,
+        destinationStop: TrackingStop,
+        busStopsUntilBoarding: Int?,
+    ): String {
+        val parts = mutableListOf<String>()
+        if (session.pathName.isNotBlank()) {
+            parts += session.pathName
+        }
+        parts += "尚未上車"
+        parts += "上車站 ${boardingStop.stopName}"
+        parts += "目的地 ${destinationStop.stopName}"
+        buildBusDistanceSummary(busStopsUntilBoarding)?.let(parts::add)
+        return parts.joinToString(" · ")
+    }
+
+    private fun buildBusDistanceSummary(stopsAway: Int?): String? {
+        return when (stopsAway) {
+            null -> null
+            0 -> "公車即將進站"
+            else -> "公車還有 $stopsAway 站"
+        }
+    }
+
+    private fun displayEtaText(liveStopState: LiveStopState?): String {
+        liveStopState ?: return "--"
+        val message = liveStopState.message?.trim().orEmpty()
+        if (message.isNotEmpty()) {
+            return when {
+                message.contains("進站") || message.contains("到站") -> "進站中"
+                message.contains("即將") -> "即將進站"
+                message.contains("未發車") -> "未發車"
+                message.contains("末班") -> "末班已過"
+                else -> message
+            }
+        }
+
+        val seconds = liveStopState.seconds ?: return "--"
+        if (seconds <= 0) {
+            return "進站中"
+        }
+        if (seconds < 60) {
+            return "即將進站"
+        }
+        return "${seconds / 60} 分"
+    }
+
+    private fun displayShortEtaText(liveStopState: LiveStopState?): String {
+        liveStopState ?: return "--"
+        val message = liveStopState.message?.trim().orEmpty()
+        if (message.isNotEmpty()) {
+            return when {
+                message.contains("進站") || message.contains("到站") -> "進站"
+                message.contains("即將") -> "即將"
+                message.contains("未發車") -> "未發"
+                message.contains("末班") -> "末班"
+                else -> message.take(4)
+            }
+        }
+
+        val seconds = liveStopState.seconds ?: return "--"
+        if (seconds <= 0) {
+            return "進站"
+        }
+        if (seconds < 60) {
+            return "<1分"
+        }
+        return "${seconds / 60}分"
+    }
+
+    private fun isImmediateEtaText(etaText: String?): Boolean {
+        val value = etaText?.trim().orEmpty()
+        return value.contains("進站") || value.contains("即將")
     }
 
     private fun buildNearestSubText(
@@ -519,6 +792,66 @@ class RouteTripMonitorService : Service() {
         }
 
         return builder.build()
+    }
+
+    private fun maybeSendTripAlerts(
+        session: TrackingSession,
+        snapshot: TrackingSnapshot,
+    ) {
+        if (appInForeground) {
+            return
+        }
+        if (!snapshot.hasBoarded) {
+            maybeSendBoardingAlert(session, snapshot)
+            return
+        }
+        maybeSendDestinationAlert(session, snapshot)
+    }
+
+    private fun maybeSendBoardingAlert(
+        session: TrackingSession,
+        snapshot: TrackingSnapshot,
+    ) {
+        if (boardingAlertSent) {
+            return
+        }
+        val boardingName = snapshot.boardingName ?: return
+        val destinationName = snapshot.destinationName ?: return
+        val busStopsAway = snapshot.boardingStopsAway
+        val shouldAlert = (busStopsAway != null && busStopsAway <= 1) ||
+            isImmediateEtaText(snapshot.boardingEtaText)
+        if (!shouldAlert) {
+            return
+        }
+
+        boardingAlertSent = true
+        notificationManager.notify(
+            ALERT_NOTIFICATION_ID,
+            NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_status_bus)
+                .setContentTitle("準備上車")
+                .setContentText("$boardingName 的公車快到了")
+                .setSubText(session.pathName)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setPublicVersion(
+                    NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+                        .setSmallIcon(R.drawable.ic_status_bus)
+                        .setContentTitle("準備上車")
+                        .setContentText("$boardingName 的公車快到了")
+                        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                        .build(),
+                )
+                .setStyle(
+                    NotificationCompat.BigTextStyle().bigText(
+                        "$boardingName 的公車快到了，請準備上車。上車後會繼續提醒你前往 $destinationName。",
+                    ),
+                )
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_REMINDER)
+                .setAutoCancel(true)
+                .setContentIntent(createOpenRoutePendingIntent(session))
+                .build(),
+        )
     }
 
     private fun maybeSendDestinationAlert(
@@ -755,6 +1088,10 @@ class RouteTripMonitorService : Service() {
                     .takeUnless { it.isNaN() },
                 initialLongitude = root.optDouble("initialLongitude", Double.NaN)
                     .takeUnless { it.isNaN() },
+                boardingStopId = root.optInt("boardingStopId", -1)
+                    .takeIf { it > 0 },
+                boardingStopName = root.optString("boardingStopName", "")
+                    .takeIf { it.isNotBlank() },
                 destinationStopId = root.optInt("destinationStopId", -1)
                     .takeIf { it > 0 },
                 destinationStopName = root.optString("destinationStopName", "")
@@ -938,6 +1275,7 @@ class RouteTripMonitorService : Service() {
         private const val POLL_INTERVAL_MS = 15_000L
         private const val LOCATION_UPDATE_INTERVAL_MS = 12_000L
         private const val LOCATION_MIN_UPDATE_INTERVAL_MS = 6_000L
+        private const val BOARDING_STOP_RADIUS_METERS = 180.0
         private const val LIVE_UPDATE_SDK_INT = 36
 
         fun startOrUpdate(context: Context, session: Map<String, Any?>) {
@@ -975,6 +1313,8 @@ data class TrackingSession(
     val appInForeground: Boolean,
     val initialLatitude: Double?,
     val initialLongitude: Double?,
+    val boardingStopId: Int?,
+    val boardingStopName: String?,
     val destinationStopId: Int?,
     val destinationStopName: String?,
     val stops: List<TrackingStop>,
@@ -1001,6 +1341,11 @@ data class TrackingSnapshot(
     val progressMax: Int?,
     val progressValue: Int?,
     val shortCriticalText: String? = null,
+    val hasBoarded: Boolean = false,
+    val boardingName: String? = null,
+    val boardingEtaText: String? = null,
+    val boardingStopsAway: Int? = null,
+    val boardingDistanceMeters: Double? = null,
     val destinationName: String? = null,
     val remainingStops: Int? = null,
     val destinationDistanceMeters: Double? = null,
