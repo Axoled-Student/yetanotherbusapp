@@ -32,6 +32,7 @@ import java.net.URL
 import java.util.concurrent.Executors
 import java.util.zip.InflaterInputStream
 import javax.xml.parsers.DocumentBuilderFactory
+import kotlin.math.abs
 import org.json.JSONArray
 import org.json.JSONObject
 import org.w3c.dom.Element
@@ -47,6 +48,9 @@ class RouteTripMonitorService : Service() {
     private var foregroundStarted = false
     private var latestLocation: Location? = null
     private var boardingAlertSent = false
+    private var boardingWindowOpen = false
+    private var rideConfirmed = false
+    private var lastNearestStopIndex: Int? = null
     private var destinationAlertStage = 0
 
     private val pollingRunnable = object : Runnable {
@@ -105,6 +109,9 @@ class RouteTripMonitorService : Service() {
                     previousBoarding != parsedSession.boardingStopId
                 ) {
                     boardingAlertSent = false
+                    boardingWindowOpen = false
+                    rideConfirmed = false
+                    lastNearestStopIndex = null
                     destinationAlertStage = 0
                 }
                 latestLocation = parsedSession.initialLatitude?.let { latitude ->
@@ -283,15 +290,17 @@ class RouteTripMonitorService : Service() {
             boardingStop.lon,
         )
         val busStopsUntilBoarding = busIndex?.let { (boardingIndex - it).coerceAtLeast(0) }
-        val hasBoarded = hasBoardedBus(
+        val hasBoarded = updateRideState(
             nearestIndex = nearestIndex,
             boardingIndex = boardingIndex,
+            busStopsUntilBoarding = busStopsUntilBoarding,
+            boardingEtaText = boardingEtaText,
             boardingDistanceMeters = boardingDistanceMeters,
             busIndex = busIndex,
         )
 
         if (!hasBoarded) {
-            val boardingProgressValue = busIndex?.plus(1)?.coerceAtMost(boardingIndex + 1)
+            val boardingProgressValue = busIndex?.plus(1)?.coerceAtMost(boardingIndex + 1) ?: 0
             return TrackingSnapshot(
                 title = "${session.routeName} · ${boardingStop.stopName}",
                 content = "公車到 ${boardingStop.stopName} 約 $boardingEtaText",
@@ -456,21 +465,39 @@ class RouteTripMonitorService : Service() {
         return (explicitBoardingIndex ?: nearestIndex).coerceAtMost(destinationIndex)
     }
 
-    private fun hasBoardedBus(
+    private fun updateRideState(
         nearestIndex: Int,
         boardingIndex: Int,
+        busStopsUntilBoarding: Int?,
+        boardingEtaText: String,
         boardingDistanceMeters: Double,
         busIndex: Int?,
     ): Boolean {
-        if (nearestIndex >= boardingIndex + 1) {
-            return true
+        val userNearBoardingStop =
+            boardingDistanceMeters <= BOARDING_STOP_RADIUS_METERS || nearestIndex == boardingIndex
+        val busNearBoardingStop =
+            (busStopsUntilBoarding != null && busStopsUntilBoarding <= 1) ||
+                isImmediateEtaText(boardingEtaText)
+        if (userNearBoardingStop && busNearBoardingStop) {
+            boardingWindowOpen = true
         }
-        if (nearestIndex >= boardingIndex && boardingDistanceMeters > BOARDING_STOP_RADIUS_METERS) {
-            return true
+
+        val previousNearest = lastNearestStopIndex
+        lastNearestStopIndex = nearestIndex
+        val movedForward = previousNearest != null && nearestIndex > previousNearest
+        val busNearUser = busIndex != null && abs(nearestIndex - busIndex) <= 1
+
+        if (
+            !rideConfirmed &&
+            boardingWindowOpen &&
+            movedForward &&
+            nearestIndex >= boardingIndex &&
+            busNearUser
+        ) {
+            rideConfirmed = true
         }
-        return busIndex != null &&
-            busIndex > boardingIndex &&
-            boardingDistanceMeters > BOARDING_STOP_RADIUS_METERS
+
+        return rideConfirmed
     }
 
     private fun buildNearestStatusText(
@@ -989,6 +1016,11 @@ class RouteTripMonitorService : Service() {
         foregroundStarted = false
         session = null
         latestLocation = null
+        boardingAlertSent = false
+        boardingWindowOpen = false
+        rideConfirmed = false
+        lastNearestStopIndex = null
+        destinationAlertStage = 0
         mainHandler.removeCallbacksAndMessages(null)
         runCatching {
             fusedLocationClient.removeLocationUpdates(locationCallback)
