@@ -323,7 +323,7 @@ class RouteTripMonitorService : Service() {
 
     private fun buildStoppedNotification(): Notification {
         return NotificationCompat.Builder(this, TRACKING_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification_bus)
+            .setSmallIcon(R.drawable.ic_status_bus)
             .setContentTitle("YABus")
             .setContentText("背景乘車提醒已停止")
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -335,7 +335,7 @@ class RouteTripMonitorService : Service() {
         snapshot: TrackingSnapshot,
     ): Notification {
         val builder = NotificationCompat.Builder(this, TRACKING_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification_bus)
+            .setSmallIcon(R.drawable.ic_status_bus)
             .setContentTitle(snapshot.title)
             .setContentText(snapshot.content)
             .setSubText(snapshot.subText)
@@ -347,8 +347,6 @@ class RouteTripMonitorService : Service() {
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-            .setColorized(true)
-            .setColor(ACCENT_COLOR)
             .addAction(
                 NotificationCompat.Action.Builder(
                     0,
@@ -368,7 +366,7 @@ class RouteTripMonitorService : Service() {
                 .setStyledByProgress(true)
                 .setProgress(progressValue)
                 .setProgressTrackerIcon(
-                    IconCompat.createWithResource(this, R.drawable.ic_notification_bus),
+                    IconCompat.createWithResource(this, R.drawable.ic_progress_bus),
                 )
                 .setProgressSegments(
                     mutableListOf(
@@ -396,7 +394,7 @@ class RouteTripMonitorService : Service() {
         snapshot: TrackingSnapshot,
     ): Notification {
         val builder = Notification.Builder(this, TRACKING_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification_bus)
+            .setSmallIcon(R.drawable.ic_status_bus)
             .setContentTitle(snapshot.title)
             .setContentText(snapshot.content)
             .setSubText(snapshot.subText)
@@ -408,8 +406,6 @@ class RouteTripMonitorService : Service() {
             .setOnlyAlertOnce(true)
             .setCategory(Notification.CATEGORY_NAVIGATION)
             .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
-            .setColorized(true)
-            .setColor(ACCENT_COLOR)
             .addAction(
                 Notification.Action.Builder(
                     null,
@@ -429,7 +425,7 @@ class RouteTripMonitorService : Service() {
                 .setStyledByProgress(true)
                 .setProgress(progressValue)
                 .setProgressTrackerIcon(
-                    Icon.createWithResource(this, R.drawable.ic_notification_bus),
+                    Icon.createWithResource(this, R.drawable.ic_progress_bus),
                 )
                 .setProgressSegments(
                     mutableListOf(
@@ -452,7 +448,7 @@ class RouteTripMonitorService : Service() {
 
     private fun buildPublicTrackingNotification(snapshot: TrackingSnapshot): Notification {
         return NotificationCompat.Builder(this, TRACKING_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification_bus)
+            .setSmallIcon(R.drawable.ic_status_bus)
             .setContentTitle(snapshot.title)
             .setContentText(snapshot.content)
             .setSubText(snapshot.subText)
@@ -465,13 +461,13 @@ class RouteTripMonitorService : Service() {
         val currentSession = session ?: return NotificationCompat.Builder(
             this,
             TRACKING_CHANNEL_ID,
-        ).setSmallIcon(R.drawable.ic_notification_bus)
+        ).setSmallIcon(R.drawable.ic_status_bus)
             .setContentTitle("YABus")
             .setContentText("背景乘車提醒已停止")
             .build()
 
         val builder = NotificationCompat.Builder(this, TRACKING_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification_bus)
+            .setSmallIcon(R.drawable.ic_status_bus)
             .setContentTitle(snapshot.title)
             .setContentText(snapshot.content)
             .setContentIntent(createOpenRoutePendingIntent(currentSession))
@@ -502,7 +498,7 @@ class RouteTripMonitorService : Service() {
                 .setStyledByProgress(true)
                 .setProgress(progressValue)
                 .setProgressTrackerIcon(
-                    IconCompat.createWithResource(this, R.drawable.ic_notification_bus),
+                    IconCompat.createWithResource(this, R.drawable.ic_progress_bus),
                 )
                 .setProgressSegments(
                     mutableListOf(
@@ -541,14 +537,14 @@ class RouteTripMonitorService : Service() {
             notificationManager.notify(
                 ALERT_NOTIFICATION_ID,
                 NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
-                    .setSmallIcon(R.drawable.ic_notification_bus)
+                    .setSmallIcon(R.drawable.ic_status_bus)
                     .setContentTitle("${session.routeName} 快到了")
                     .setContentText("$destinationName 還有 $remainingStops 站")
                     .setSubText(session.pathName)
                     .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                     .setPublicVersion(
                         NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
-                            .setSmallIcon(R.drawable.ic_notification_bus)
+                            .setSmallIcon(R.drawable.ic_status_bus)
                             .setContentTitle("${session.routeName} 快到了")
                             .setContentText("$destinationName 還有 $remainingStops 站")
                             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -572,14 +568,14 @@ class RouteTripMonitorService : Service() {
             notificationManager.notify(
                 ALERT_NOTIFICATION_ID,
                 NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
-                    .setSmallIcon(R.drawable.ic_notification_bus)
+                    .setSmallIcon(R.drawable.ic_status_bus)
                     .setContentTitle("準備下車")
                     .setContentText("你已接近 $destinationName")
                     .setSubText(session.pathName)
                     .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                     .setPublicVersion(
                         NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
-                            .setSmallIcon(R.drawable.ic_notification_bus)
+                            .setSmallIcon(R.drawable.ic_status_bus)
                             .setContentTitle("準備下車")
                             .setContentText("你已接近 $destinationName")
                             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -920,7 +916,7 @@ class RouteTripMonitorService : Service() {
     }
 
     private fun supportsFrameworkLiveUpdate(): Boolean {
-        return false
+        return Build.VERSION.SDK_INT >= LIVE_UPDATE_SDK_INT
     }
 
     companion object {
@@ -943,7 +939,6 @@ class RouteTripMonitorService : Service() {
         private const val LOCATION_UPDATE_INTERVAL_MS = 12_000L
         private const val LOCATION_MIN_UPDATE_INTERVAL_MS = 6_000L
         private const val LIVE_UPDATE_SDK_INT = 36
-        private const val ACCENT_COLOR = -16027003
 
         fun startOrUpdate(context: Context, session: Map<String, Any?>) {
             val sessionJson = JSONObject(session).toString()
