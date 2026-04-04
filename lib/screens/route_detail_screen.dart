@@ -8,7 +8,9 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../app/bus_app.dart';
 import '../core/android_home_integration.dart';
 import '../core/android_trip_monitor.dart';
+import '../core/app_launch_service.dart';
 import '../core/models.dart';
+import '../core/route_detail_launch_bridge.dart';
 import '../widgets/eta_badge.dart';
 
 class RouteDetailScreen extends StatefulWidget {
@@ -31,6 +33,7 @@ class RouteDetailScreen extends StatefulWidget {
 
 class _RouteDetailScreenState extends State<RouteDetailScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
+  late final RouteDetailLaunchHandler _launchHandler;
   bool _isLoading = true;
   String? _error;
   String? _statusMessage;
@@ -50,6 +53,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   bool _backgroundTripMonitorPromptInProgress = false;
   bool _awaitingBackgroundLocationPermission = false;
   bool _destinationPromptShown = false;
+  int? _requestedPathId;
+  int? _requestedStopId;
   int? _targetInitialPathId;
   int? _boardingStopId;
   String? _boardingStopName;
@@ -65,7 +70,11 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _launchHandler = _handleLaunchAction;
+    RouteDetailLaunchBridge.instance.attach(_launchHandler);
     _countdownProgressController = AnimationController(vsync: this);
+    _requestedPathId = widget.initialPathId;
+    _requestedStopId = widget.initialStopId;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_refresh());
     });
@@ -83,6 +92,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    RouteDetailLaunchBridge.instance.detach(_launchHandler);
     _countdownTimer?.cancel();
     _countdownProgressController.dispose();
     _positionSubscription?.cancel();
@@ -267,22 +277,43 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   }
 
   int _resolveInitialPathIndex(List<PathInfo> paths) {
-    if (widget.initialPathId == null || paths.isEmpty) {
+    if (paths.isEmpty) {
       return 0;
     }
 
+    final requestedPathId = _requestedPathId;
+    if (requestedPathId == null) {
+      return _resolvePathIndexFromStopId(paths, _requestedStopId) ?? 0;
+    }
+
     final exactMatch = paths.indexWhere(
-      (path) => path.pathId == widget.initialPathId,
+      (path) => path.pathId == requestedPathId,
     );
     if (exactMatch != -1) {
       return exactMatch;
     }
 
-    final legacyIndex = widget.initialPathId!;
+    final legacyIndex = requestedPathId;
     if (legacyIndex >= 0 && legacyIndex < paths.length) {
       return legacyIndex;
     }
-    return 0;
+    return _resolvePathIndexFromStopId(paths, _requestedStopId) ?? 0;
+  }
+
+  int? _resolvePathIndexFromStopId(List<PathInfo> paths, int? stopId) {
+    final detail = _detail;
+    if (detail == null || stopId == null) {
+      return null;
+    }
+
+    for (var index = 0; index < paths.length; index++) {
+      final path = paths[index];
+      final stops = detail.stopsByPath[path.pathId] ?? const <StopInfo>[];
+      if (stops.any((stop) => stop.stopId == stopId)) {
+        return index;
+      }
+    }
+    return null;
   }
 
   void _startCountdown(int seconds) {
@@ -309,6 +340,103 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
         _remainingSeconds -= 1;
       });
     });
+  }
+
+  Future<bool> _handleLaunchAction(AppLaunchAction action) async {
+    if (!mounted ||
+        action.target != AppLaunchTarget.routeDetail ||
+        action.provider != widget.provider ||
+        action.routeKey != widget.routeKey) {
+      return false;
+    }
+
+    final route = ModalRoute.of(context);
+    if (route == null) {
+      return false;
+    }
+
+    Navigator.of(context).popUntil((candidate) => identical(candidate, route));
+    await _applyLaunchFocus(
+      requestedPathId: action.pathId,
+      requestedStopId: action.stopId,
+    );
+    return true;
+  }
+
+  Future<void> _applyLaunchFocus({
+    required int? requestedPathId,
+    required int? requestedStopId,
+  }) async {
+    final detail = _detail;
+    final resolvedPathId = _resolveRequestedPathId(
+      requestedPathId: requestedPathId,
+      requestedStopId: requestedStopId,
+    );
+
+    setState(() {
+      _requestedPathId = resolvedPathId;
+      _requestedStopId = requestedStopId;
+      _targetInitialPathId = resolvedPathId;
+      _didScrollToInitialStop = requestedStopId == null;
+      _didAutoScrollToCurrentLocation = false;
+    });
+
+    if (detail != null && _tabController != null && resolvedPathId != null) {
+      final targetIndex = detail.paths.indexWhere(
+        (path) => path.pathId == resolvedPathId,
+      );
+      if (targetIndex != -1 && _tabController!.index != targetIndex) {
+        _tabController!.animateTo(
+          targetIndex,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+        for (var attempt = 0; attempt < 12; attempt++) {
+          await WidgetsBinding.instance.endOfFrame;
+          if (!mounted ||
+              _tabController == null ||
+              !_tabController!.indexIsChanging) {
+            break;
+          }
+        }
+      }
+    }
+
+    _scrollToInitialStopIfNeeded();
+    unawaited(_configureBackgroundTripMonitorIfNeeded());
+    unawaited(_refresh());
+  }
+
+  int? _resolveRequestedPathId({
+    required int? requestedPathId,
+    required int? requestedStopId,
+  }) {
+    final detail = _detail;
+    if (detail == null) {
+      return requestedPathId;
+    }
+
+    if (requestedPathId != null) {
+      for (final path in detail.paths) {
+        if (path.pathId == requestedPathId) {
+          return path.pathId;
+        }
+      }
+      if (requestedPathId >= 0 && requestedPathId < detail.paths.length) {
+        return detail.paths[requestedPathId].pathId;
+      }
+    }
+
+    if (requestedStopId != null) {
+      for (final path in detail.paths) {
+        final stops = detail.stopsByPath[path.pathId] ?? const <StopInfo>[];
+        if (stops.any((stop) => stop.stopId == requestedStopId)) {
+          return path.pathId;
+        }
+      }
+    }
+
+    return _currentPathId;
   }
 
   Widget _buildBottomProgressIndicator() {
@@ -343,9 +471,10 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   }
 
   void _scrollToInitialStopIfNeeded() {
+    final requestedStopId = _requestedStopId;
     if (_didScrollToInitialStop ||
         _isScrollingToInitialStop ||
-        widget.initialStopId == null ||
+        requestedStopId == null ||
         _detail == null) {
       return;
     }
@@ -358,7 +487,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       return;
     }
 
-    unawaited(_attemptScrollToInitialStop(pathId, widget.initialStopId!));
+    unawaited(_attemptScrollToInitialStop(pathId, requestedStopId));
   }
 
   Future<void> _attemptScrollToInitialStop(int pathId, int stopId) async {
@@ -519,9 +648,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
         builder: (context) {
           return AlertDialog(
             title: const Text('啟用背景乘車提醒？'),
-            content: const Text(
-              'YABus 可以在你把 app 丟到背景後繼續追蹤這條路線，並在接近目的地下車前提醒你。',
-            ),
+            content: const Text('YABus 可以在你把 app 丟到背景後繼續追蹤這條路線，並在接近目的地下車前提醒你。'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(false),
@@ -585,13 +712,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
           return;
         }
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                '要使用背景乘車提醒，必須先允許定位權限。',
-              ),
-            ),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('要使用背景乘車提醒，必須先允許定位權限。')));
         }
         return;
       }
@@ -660,9 +783,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       builder: (context) {
         return AlertDialog(
           title: const Text('允許背景定位'),
-          content: const Text(
-            '要在把 app 丟到背景後繼續提醒，Android 需要將定位權限設為「永遠允許」。',
-          ),
+          content: const Text('要在把 app 丟到背景後繼續提醒，Android 需要將定位權限設為「永遠允許」。'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -694,9 +815,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       builder: (context) {
         return AlertDialog(
           title: const Text('要設定下車提醒嗎？'),
-          content: const Text(
-            '選一個你要下車的站牌，YABus 會在快到站時提醒你。',
-          ),
+          content: const Text('選一個你要下車的站牌，YABus 會在快到站時提醒你。'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -768,9 +887,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已將 ${stop.stopName} 設為下車提醒。')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('已將 ${stop.stopName} 設為下車提醒。')));
   }
 
   Future<void> _clearDestinationStop() async {
@@ -923,7 +1042,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   }
 
   void _maybeScrollToCurrentLocation() {
-    if (_didAutoScrollToCurrentLocation || widget.initialStopId != null) {
+    if (_didAutoScrollToCurrentLocation || _requestedStopId != null) {
       return;
     }
 
@@ -941,7 +1060,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   }
 
   bool _isInitialStop(StopInfo stop) {
-    if (widget.initialStopId != stop.stopId) {
+    if (_requestedStopId != stop.stopId) {
       return false;
     }
     return _targetInitialPathId == null || _targetInitialPathId == stop.pathId;
@@ -1044,9 +1163,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已清除下車提醒。')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已清除下車提醒。')));
       return;
     }
 
@@ -1067,11 +1186,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
             SimpleDialogOption(
               onPressed: () =>
                   Navigator.of(context).pop(_StopAction.destination),
-              child: Text(
-                _isDestinationStop(stop)
-                    ? '清除下車提醒'
-                    : '設為下車提醒',
-              ),
+              child: Text(_isDestinationStop(stop) ? '清除下車提醒' : '設為下車提醒'),
             ),
             if (defaultTargetPlatform == TargetPlatform.android)
               SimpleDialogOption(

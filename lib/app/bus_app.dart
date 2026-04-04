@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../core/app_controller.dart';
 import '../core/app_launch_service.dart';
 import '../core/models.dart';
+import '../core/route_detail_launch_bridge.dart';
 import '../screens/favorites_screen.dart';
 import '../screens/home_screen.dart';
 import '../screens/onboarding_screen.dart';
@@ -158,7 +159,15 @@ class _AppHomeState extends State<_AppHome> {
     }
     _pendingLaunchAction = null;
     final navigator = Navigator.of(context);
-    navigator.popUntil((route) => route.isFirst);
+
+    if (action.target == AppLaunchTarget.routeDetail) {
+      final didHandleInPlace = await RouteDetailLaunchBridge.instance.tryHandle(
+        action,
+      );
+      if (didHandleInPlace) {
+        return;
+      }
+    }
 
     switch (action.target) {
       case AppLaunchTarget.routeDetail:
