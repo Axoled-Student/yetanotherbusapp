@@ -24,6 +24,7 @@ class _TrackedBusesScreenState extends State<TrackedBusesScreen>
   String? _error;
   String? _statusMessage;
   String _loadedSignature = '';
+  String _refreshingSignature = '';
   bool _refreshScheduled = false;
   int _refreshRequestId = 0;
   int _remainingSeconds = 0;
@@ -60,6 +61,9 @@ class _TrackedBusesScreenState extends State<TrackedBusesScreen>
 
   void _scheduleRefreshIfNeeded(AppController controller) {
     if (controller.trackedBuses.isEmpty) {
+      return;
+    }
+    if (_isLoading) {
       return;
     }
     final signature = _trackedBusesSignature(controller.trackedBuses);
@@ -130,6 +134,9 @@ class _TrackedBusesScreenState extends State<TrackedBusesScreen>
     final controller = AppControllerScope.read(context);
     final trackedBuses = controller.trackedBuses;
     final signature = _trackedBusesSignature(trackedBuses);
+    if (_isLoading && _refreshingSignature == signature) {
+      return;
+    }
     final requestId = ++_refreshRequestId;
 
     if (trackedBuses.isEmpty) {
@@ -139,6 +146,7 @@ class _TrackedBusesScreenState extends State<TrackedBusesScreen>
         _error = null;
         _statusMessage = null;
         _loadedSignature = '';
+        _refreshingSignature = '';
       });
       _countdownTimer?.cancel();
       _countdownProgressController
@@ -150,6 +158,7 @@ class _TrackedBusesScreenState extends State<TrackedBusesScreen>
     setState(() {
       _isLoading = true;
       _error = null;
+      _refreshingSignature = signature;
       _statusMessage = '正在更新';
     });
 
@@ -181,6 +190,7 @@ class _TrackedBusesScreenState extends State<TrackedBusesScreen>
         _error = null;
         _statusMessage = nextStatusMessage;
         _loadedSignature = signature;
+        _refreshingSignature = '';
       });
 
       _startCountdown(
@@ -195,6 +205,7 @@ class _TrackedBusesScreenState extends State<TrackedBusesScreen>
       setState(() {
         _isLoading = false;
         _error = '$error';
+        _refreshingSignature = '';
         _loadedSignature = signature;
         _statusMessage = _items.isEmpty ? '追蹤公車更新失敗' : '更新失敗，先保留上一筆資料';
       });
