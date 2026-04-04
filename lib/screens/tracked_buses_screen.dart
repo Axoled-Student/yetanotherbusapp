@@ -63,7 +63,7 @@ class _TrackedBusesScreenState extends State<TrackedBusesScreen>
       return;
     }
     final signature = _trackedBusesSignature(controller.trackedBuses);
-    if (_loadedSignature != signature || (_items.isEmpty && !_isLoading)) {
+    if (_loadedSignature != signature) {
       _scheduleRefresh();
     }
   }
@@ -195,6 +195,7 @@ class _TrackedBusesScreenState extends State<TrackedBusesScreen>
       setState(() {
         _isLoading = false;
         _error = '$error';
+        _loadedSignature = signature;
         _statusMessage = _items.isEmpty ? '追蹤公車更新失敗' : '更新失敗，先保留上一筆資料';
       });
       _startCountdown(controller.settings.busErrorUpdateTime);

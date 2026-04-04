@@ -25,6 +25,7 @@ class BusRepository {
 
   static const _busFileBaseUrl = 'https://files.bus.yahoo.com/';
   static const _busServerBaseUrl = 'https://busserver.bus.yahoo.com/';
+  static const _trackedBusRequestTimeout = Duration(seconds: 8);
   static const _webLocalDatabaseUnsupportedMessage =
       'Web does not support the local SQLite database used by this app yet. '
       'Use Windows or Android for database-backed features.';
@@ -244,11 +245,13 @@ class BusRepository {
   Future<TrackedBusSnapshot> getTrackedBusSnapshot(
     TrackedBus trackedBus,
   ) async {
-    final response = await _client.get(
-      Uri.parse(
-        '${_busServerBaseUrl}api/bus/${Uri.encodeComponent(trackedBus.vehicleId)}',
-      ),
-    );
+    final response = await _client
+        .get(
+          Uri.parse(
+            '${_busServerBaseUrl}api/bus/${Uri.encodeComponent(trackedBus.vehicleId)}',
+          ),
+        )
+        .timeout(_trackedBusRequestTimeout);
     final plainText = utf8
         .decode(response.bodyBytes, allowMalformed: true)
         .trim();
