@@ -278,58 +278,64 @@ private enum FavoriteWidgetRouteFetcher {
 
     let bufferSize = 64 * 1024
     var output = Data()
-    var stream = compression_stream(
-      dst_ptr: nil,
-      dst_size: 0,
-      src_ptr: nil,
-      src_size: 0,
-      state: nil
-    )
-    let status = compression_stream_init(
-      &stream,
-      COMPRESSION_STREAM_DECODE,
-      COMPRESSION_ZLIB
-    )
-    guard status != COMPRESSION_STATUS_ERROR else {
-      return nil
-    }
-    defer {
-      compression_stream_destroy(&stream)
-    }
+    var dummyByte: UInt8 = 0
 
-    return data.withUnsafeBytes { sourceBuffer -> Data? in
-      guard let sourceBaseAddress = sourceBuffer.bindMemory(to: UInt8.self).baseAddress else {
-        return nil
-      }
-
-      let destinationBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
-      defer {
-        destinationBuffer.deallocate()
-      }
-
-      stream.src_ptr = sourceBaseAddress
-      stream.src_size = data.count
-
-      while true {
-        stream.dst_ptr = destinationBuffer
-        stream.dst_size = bufferSize
-
-        let processStatus = compression_stream_process(
-          &stream,
-          Int32(COMPRESSION_STREAM_FINALIZE.rawValue)
+    return withUnsafeMutablePointer(to: &dummyByte) { dummyDstPtr in
+      withUnsafePointer(to: &dummyByte) { dummySrcPtr in
+        var stream = compression_stream(
+          dst_ptr: dummyDstPtr,
+          dst_size: 0,
+          src_ptr: dummySrcPtr,
+          src_size: 0,
+          state: nil
         )
-        let writtenBytes = bufferSize - stream.dst_size
-        if writtenBytes > 0 {
-          output.append(destinationBuffer, count: writtenBytes)
+        let status = compression_stream_init(
+          &stream,
+          COMPRESSION_STREAM_DECODE,
+          COMPRESSION_ZLIB
+        )
+        guard status != COMPRESSION_STATUS_ERROR else {
+          return nil
+        }
+        defer {
+          compression_stream_destroy(&stream)
         }
 
-        switch processStatus {
-        case COMPRESSION_STATUS_OK:
-          continue
-        case COMPRESSION_STATUS_END:
-          return output
-        default:
-          return nil
+        return data.withUnsafeBytes { sourceBuffer -> Data? in
+          guard let sourceBaseAddress = sourceBuffer.bindMemory(to: UInt8.self).baseAddress else {
+            return nil
+          }
+
+          let destinationBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+          defer {
+            destinationBuffer.deallocate()
+          }
+
+          stream.src_ptr = sourceBaseAddress
+          stream.src_size = data.count
+
+          while true {
+            stream.dst_ptr = destinationBuffer
+            stream.dst_size = bufferSize
+
+            let processStatus = compression_stream_process(
+              &stream,
+              Int32(COMPRESSION_STREAM_FINALIZE.rawValue)
+            )
+            let writtenBytes = bufferSize - stream.dst_size
+            if writtenBytes > 0 {
+              output.append(destinationBuffer, count: writtenBytes)
+            }
+
+            switch processStatus {
+            case COMPRESSION_STATUS_OK:
+              continue
+            case COMPRESSION_STATUS_END:
+              return output
+            default:
+              return nil
+            }
+          }
         }
       }
     }
