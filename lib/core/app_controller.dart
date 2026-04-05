@@ -7,6 +7,7 @@ import 'app_build_info.dart';
 import 'app_update_installer.dart';
 import 'app_update_service.dart';
 import 'bus_repository.dart';
+import 'ios_widget_integration.dart';
 import 'models.dart';
 import 'smart_route_service.dart';
 import 'storage_service.dart';
@@ -81,6 +82,7 @@ class AppController extends ChangeNotifier {
     await AndroidHomeIntegration.updateFavoriteWidgetAutoRefreshMinutes(
       _settings.favoriteWidgetAutoRefreshMinutes,
     );
+    await IOSWidgetIntegration.syncFavoriteGroups(_favoriteGroups);
     await AndroidHomeIntegration.syncSmartRouteNotifications(
       _settings.enableSmartRouteNotifications,
     );
@@ -478,6 +480,7 @@ class AppController extends ChangeNotifier {
 
     _favoriteGroups = {..._favoriteGroups, trimmed: <FavoriteStop>[]};
     await storage.saveFavoriteGroups(_favoriteGroups);
+    await IOSWidgetIntegration.syncFavoriteGroups(_favoriteGroups);
     await AndroidHomeIntegration.refreshFavoriteWidgets();
     notifyListeners();
   }
@@ -487,6 +490,7 @@ class AppController extends ChangeNotifier {
     next.remove(name);
     _favoriteGroups = next;
     await storage.saveFavoriteGroups(_favoriteGroups);
+    await IOSWidgetIntegration.syncFavoriteGroups(_favoriteGroups);
     await AndroidHomeIntegration.refreshFavoriteWidgets();
     notifyListeners();
   }
@@ -515,6 +519,7 @@ class AppController extends ChangeNotifier {
 
     _favoriteGroups = next;
     await storage.saveFavoriteGroups(_favoriteGroups);
+    await IOSWidgetIntegration.syncFavoriteGroups(_favoriteGroups);
     await AndroidHomeIntegration.refreshFavoriteWidgets();
     notifyListeners();
     return targetGroup;
@@ -531,6 +536,7 @@ class AppController extends ChangeNotifier {
     next[groupName]?.removeWhere((item) => item.sameAs(favorite));
     _favoriteGroups = next;
     await storage.saveFavoriteGroups(_favoriteGroups);
+    await IOSWidgetIntegration.syncFavoriteGroups(_favoriteGroups);
     await AndroidHomeIntegration.refreshFavoriteWidgets();
     notifyListeners();
   }
@@ -607,6 +613,8 @@ class AppController extends ChangeNotifier {
 
     _favoriteGroups = {..._favoriteGroups, groupName: updatedGroup};
     await storage.saveFavoriteGroups(_favoriteGroups);
+    await IOSWidgetIntegration.syncFavoriteGroups(_favoriteGroups);
+    await AndroidHomeIntegration.refreshFavoriteWidgets();
   }
 
   bool isTrackedBus(String vehicleId) {

@@ -76,6 +76,14 @@ class AppLaunchService {
     });
 
     try {
+      await _channel.invokeMethod<void>('setLaunchListenerReady');
+    } on MissingPluginException {
+      // Native launch bridges are optional on platforms without deep links.
+    } on PlatformException {
+      // Ignore setup failures so app startup continues.
+    }
+
+    try {
       final payload = await _channel.invokeMethod<Map<Object?, Object?>>(
         'takeInitialLaunchAction',
       );
