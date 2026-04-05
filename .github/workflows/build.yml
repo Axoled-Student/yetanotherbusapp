@@ -272,3 +272,67 @@ jobs:
         with:
           name: macos-release
           path: build/macos/Build/Products/Release/YetAnotherBusApp.app
+
+  build-ios-ipa:
+    name: Build iOS unsigned IPA
+    runs-on: macos-latest
+    needs: verify
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Prepare iOS build
+        run: flutter precache --ios
+
+      - name: Generate iOS archive without codesign
+        run: >
+          flutter build ios --release --no-codesign
+          --dart-define=APP_GIT_SHA=${{ github.sha }}
+          --dart-define=APP_UPDATE_CHANNEL=${{ env.APP_UPDATE_CHANNEL }}
+          --dart-define=APP_REPO_OWNER=${{ env.APP_REPO_OWNER }}
+          --dart-define=APP_REPO_NAME=${{ env.APP_REPO_NAME }}
+          --dart-define=APP_WORKFLOW_API_ID=${{ env.APP_WORKFLOW_API_ID }}
+          --dart-define=APP_WORKFLOW_NIGHTLY_ID=${{ env.APP_WORKFLOW_NIGHTLY_ID }}
+          --dart-define=APP_NIGHTLY_ARTIFACT=${{ env.APP_NIGHTLY_ARTIFACT }}
+
+      - name: Archive Runner.app
+        run: |
+          xcodebuild \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination generic/platform=iOS \
+            -archivePath build/ipa/Runner.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_IDENTITY="" \
+            archive
+
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p build/ipa/temp/Payload
+          mv build/ipa/*.xcarchive/Products/Applications/*.app build/ipa/temp/Payload/
+          rm -rf build/ipa/*.xcarchive
+          cd build/ipa/temp
+          zip -r Generated_IPA.zip Payload
+          mv Generated_IPA.zip ../Generated_IPA.ipa
+          cd ../../..
+          rm -rf build/ipa/temp
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ios-unsigned-ipa
+          path: build/ipa/Generated_IPA.ipa
