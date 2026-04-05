@@ -625,7 +625,8 @@ class RouteTripMonitorService : Service() {
         return NotificationCompat.Builder(this, TRACKING_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_status_bus)
             .setContentTitle("YABus")
-            .setContentText("背景乘車提醒已停止")
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
     }
@@ -767,7 +768,8 @@ class RouteTripMonitorService : Service() {
             TRACKING_CHANNEL_ID,
         ).setSmallIcon(R.drawable.ic_status_bus)
             .setContentTitle("YABus")
-            .setContentText("背景乘車提醒已停止")
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
             .build()
 
         val builder = NotificationCompat.Builder(this, TRACKING_CHANNEL_ID)
@@ -1207,6 +1209,9 @@ class RouteTripMonitorService : Service() {
         if (stopsAway == null) {
             return cleanEtaText
         }
+        if (stopsAway == 0 && cleanEtaText != null) {
+            return cleanEtaText
+        }
 
         val left = when (stopsAway) {
             0 -> "到站"
@@ -1224,15 +1229,16 @@ class RouteTripMonitorService : Service() {
         if (trimmed.isEmpty() || trimmed == "--") {
             return null
         }
-        if (trimmed.startsWith("<") || trimmed.endsWith("分")) {
-            return trimmed.take(7)
-        }
-        return null
+        return trimmed.take(7)
     }
 
     private fun buildLegacyShortCriticalText(stopsAway: Int?, etaText: String): String? {
         if (stopsAway == null && etaText == "--") {
             return null
+        }
+
+        if (stopsAway == 0 && etaText != "--") {
+            return etaText.take(7)
         }
 
         val left = when (stopsAway) {
