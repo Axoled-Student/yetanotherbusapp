@@ -4,7 +4,7 @@ import Foundation
 import SwiftUI
 import WidgetKit
 
-private enum FavoriteWidgetSharedStore {
+enum FavoriteWidgetSharedStore {
   static let appGroupIdentifier = "group.tw.avianjay.taiwanbus.flutter"
   static let favoriteGroupsKey = "favorite_groups_json"
 
@@ -29,7 +29,7 @@ private enum FavoriteWidgetSharedStore {
   }
 }
 
-private struct FavoriteWidgetStop: Decodable, Hashable {
+struct FavoriteWidgetStop: Decodable, Hashable {
   let provider: String
   let routeKey: Int
   let pathId: Int
@@ -38,18 +38,8 @@ private struct FavoriteWidgetStop: Decodable, Hashable {
   let stopName: String?
 }
 
-private struct FavoriteWidgetLiveStop: Hashable {
-  let sec: Int?
-  let msg: String?
-  let vehicleId: String?
-}
-
-private struct FavoriteWidgetItem: Identifiable, Hashable {
+struct FavoriteWidgetItem: Identifiable, Hashable {
   let id: String
-  let provider: String
-  let routeKey: Int
-  let pathId: Int
-  let stopId: Int
   let routeName: String
   let stopName: String
   let etaText: String
@@ -57,7 +47,7 @@ private struct FavoriteWidgetItem: Identifiable, Hashable {
   let routeURL: URL?
 }
 
-private struct FavoriteGroupEntry: TimelineEntry {
+struct FavoriteGroupEntry: TimelineEntry {
   let date: Date
   let groupName: String
   let items: [FavoriteWidgetItem]
@@ -66,11 +56,17 @@ private struct FavoriteGroupEntry: TimelineEntry {
   let groupURL: URL?
 }
 
-struct FavoriteGroupConfigurationIntent: WidgetConfigurationIntent {
-  static var title: LocalizedStringResource = "最愛群組"
-  static var description = IntentDescription("顯示某個最愛群組的到站時間。")
+private struct FavoriteWidgetLiveStop: Hashable {
+  let sec: Int?
+  let msg: String?
+  let vehicleId: String?
+}
 
-  @Parameter(title: "群組", optionsProvider: FavoriteGroupOptionsProvider())
+struct FavoriteGroupConfigurationIntent: WidgetConfigurationIntent {
+  static var title: LocalizedStringResource = "Favorite Group"
+  static var description = IntentDescription("Show ETA for one favorite group.")
+
+  @Parameter(title: "Group", optionsProvider: FavoriteGroupOptionsProvider())
   var groupName: String?
 }
 
@@ -84,29 +80,21 @@ struct FavoriteGroupTimelineProvider: AppIntentTimelineProvider {
   func placeholder(in context: Context) -> FavoriteGroupEntry {
     FavoriteGroupEntry(
       date: .now,
-      groupName: "最愛群組",
+      groupName: "Favorites",
       items: [
         FavoriteWidgetItem(
           id: "sample-1",
-          provider: "twn",
-          routeKey: 0,
-          pathId: 0,
-          stopId: 0,
           routeName: "307",
-          stopName: "臺北車站",
-          etaText: "3分",
+          stopName: "Taipei Main Station",
+          etaText: "3m",
           noteText: "YABus",
           routeURL: nil
         ),
         FavoriteWidgetItem(
           id: "sample-2",
-          provider: "twn",
-          routeKey: 0,
-          pathId: 0,
-          stopId: 0,
-          routeName: "綠3",
-          stopName: "中山醫學大學",
-          etaText: "8分",
+          routeName: "Green 3",
+          stopName: "Chung Shan Medical University",
+          etaText: "8m",
           noteText: "YABus",
           routeURL: nil
         ),
@@ -130,11 +118,9 @@ struct FavoriteGroupTimelineProvider: AppIntentTimelineProvider {
   ) async -> Timeline<FavoriteGroupEntry> {
     let entry = await FavoriteGroupEntryLoader.load(configuration: configuration)
     let refreshMinutes = entry.items.isEmpty ? 15 : 5
-    let nextRefresh = Calendar.current.date(
-      byAdding: .minute,
-      value: refreshMinutes,
-      to: Date()
-    ) ?? Date().addingTimeInterval(Double(refreshMinutes) * 60)
+    let nextRefresh =
+      Calendar.current.date(byAdding: .minute, value: refreshMinutes, to: Date())
+      ?? Date().addingTimeInterval(Double(refreshMinutes) * 60)
     return Timeline(entries: [entry], policy: .after(nextRefresh))
   }
 }
@@ -145,19 +131,18 @@ private enum FavoriteGroupEntryLoader {
     guard !groups.isEmpty else {
       return FavoriteGroupEntry(
         date: .now,
-        groupName: "最愛群組",
+        groupName: "Favorites",
         items: [],
-        statusMessage: "先在 App 建立最愛群組",
+        statusMessage: "Create favorites in the app first.",
         lastUpdated: nil,
         groupURL: nil
       )
     }
 
     let sortedNames = groups.keys.sorted()
-    let requestedName = configuration.groupName?.trimmingCharacters(in: .whitespacesAndNewlines)
-    let selectedName = (requestedName?.isEmpty == false && groups[requestedName!] != nil)
-      ? requestedName!
-      : sortedNames[0]
+    let requestedName = configuration.groupName?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let selectedName = requestedName.flatMap { groups[$0] == nil ? nil : $0 } ?? sortedNames[0]
 
     let favorites = groups[selectedName] ?? []
     guard !favorites.isEmpty else {
@@ -165,19 +150,18 @@ private enum FavoriteGroupEntryLoader {
         date: .now,
         groupName: selectedName,
         items: [],
-        statusMessage: "這個群組還沒有收藏站牌",
+        statusMessage: "This group has no saved stops yet.",
         lastUpdated: nil,
         groupURL: FavoriteWidgetDeepLink.group(named: selectedName)
       )
     }
 
     let fetchResult = await FavoriteWidgetRouteFetcher.loadItems(for: favorites)
-    let statusMessage: String? = fetchResult.didFetchLiveData ? nil : "暫時無法更新"
     return FavoriteGroupEntry(
       date: .now,
       groupName: selectedName,
       items: fetchResult.items,
-      statusMessage: statusMessage,
+      statusMessage: fetchResult.didFetchLiveData ? nil : "Unable to refresh right now.",
       lastUpdated: fetchResult.didFetchLiveData ? Date() : nil,
       groupURL: FavoriteWidgetDeepLink.group(named: selectedName)
     )
@@ -185,7 +169,9 @@ private enum FavoriteGroupEntryLoader {
 }
 
 private enum FavoriteWidgetRouteFetcher {
-  static func loadItems(for favorites: [FavoriteWidgetStop]) async -> (items: [FavoriteWidgetItem], didFetchLiveData: Bool) {
+  static func loadItems(
+    for favorites: [FavoriteWidgetStop]
+  ) async -> (items: [FavoriteWidgetItem], didFetchLiveData: Bool) {
     var liveStopsByRoute = [String: [Int: FavoriteWidgetLiveStop]]()
     var successfulFetchCount = 0
     let uniqueRoutes = Dictionary(
@@ -213,12 +199,8 @@ private enum FavoriteWidgetRouteFetcher {
       let liveStop = liveStopsByRoute[routeRequestKey(for: favorite)]?[favorite.stopId]
       return FavoriteWidgetItem(
         id: "\(favorite.provider):\(favorite.routeKey):\(favorite.pathId):\(favorite.stopId)",
-        provider: favorite.provider,
-        routeKey: favorite.routeKey,
-        pathId: favorite.pathId,
-        stopId: favorite.stopId,
-        routeName: favorite.routeName?.nilIfBlank ?? "路線 \(favorite.routeKey)",
-        stopName: favorite.stopName?.nilIfBlank ?? "站牌 \(favorite.stopId)",
+        routeName: favorite.routeName?.nilIfBlank ?? "Route \(favorite.routeKey)",
+        stopName: favorite.stopName?.nilIfBlank ?? "Stop \(favorite.stopId)",
         etaText: formatETA(liveStop),
         noteText: liveStop?.vehicleId?.nilIfBlank ?? favorite.provider.uppercased(),
         routeURL: FavoriteWidgetDeepLink.route(
@@ -233,7 +215,9 @@ private enum FavoriteWidgetRouteFetcher {
     return (items, successfulFetchCount > 0)
   }
 
-  private static func fetchLiveStops(routeKey: Int) async -> (success: Bool, liveStops: [Int: FavoriteWidgetLiveStop]) {
+  private static func fetchLiveStops(
+    routeKey: Int
+  ) async -> (success: Bool, liveStops: [Int: FavoriteWidgetLiveStop]) {
     guard let url = URL(string: "https://busserver.bus.yahoo.com/api/route/\(routeKey)") else {
       return (false, [:])
     }
@@ -244,12 +228,17 @@ private enum FavoriteWidgetRouteFetcher {
 
     do {
       let (data, response) = try await URLSession.shared.data(for: request)
-      guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+      guard
+        let httpResponse = response as? HTTPURLResponse,
+        (200...299).contains(httpResponse.statusCode)
+      else {
         return (false, [:])
       }
+
       guard let xmlData = decodeXMLData(data) else {
         return (false, [:])
       }
+
       return (true, RouteLiveStopXMLParser.parse(xmlData))
     } catch {
       return (false, [:])
@@ -276,7 +265,7 @@ private enum FavoriteWidgetRouteFetcher {
   }
 
   private static func looksLikeXML(_ data: Data) -> Bool {
-    guard let text = String(data: data.prefix(32), encoding: .utf8) else {
+    guard let text = String(data: Data(data.prefix(32)), encoding: .utf8) else {
       return false
     }
     return text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<")
@@ -289,8 +278,18 @@ private enum FavoriteWidgetRouteFetcher {
 
     let bufferSize = 64 * 1024
     var output = Data()
-    var stream = compression_stream()
-    let status = compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
+    var stream = compression_stream(
+      dst_ptr: nil,
+      dst_size: 0,
+      src_ptr: nil,
+      src_size: 0,
+      state: nil
+    )
+    let status = compression_stream_init(
+      &stream,
+      COMPRESSION_STREAM_DECODE,
+      COMPRESSION_ZLIB
+    )
     guard status != COMPRESSION_STATUS_ERROR else {
       return nil
     }
@@ -353,12 +352,12 @@ private enum FavoriteWidgetRouteFetcher {
       return "--"
     }
     if seconds <= 0 {
-      return "進站中"
+      return "Arriving"
     }
     if seconds < 60 {
-      return "<1分"
+      return "<1m"
     }
-    return "\(seconds / 60)分"
+    return "\(seconds / 60)m"
   }
 }
 
@@ -386,6 +385,7 @@ private final class RouteLiveStopXMLParser: NSObject, XMLParserDelegate {
         currentStopID = nil
         return
       }
+
       currentStopID = stopID
       liveStops[stopID] = FavoriteWidgetLiveStop(
         sec: Int(attributeDict["sec"] ?? ""),
@@ -396,12 +396,12 @@ private final class RouteLiveStopXMLParser: NSObject, XMLParserDelegate {
     }
 
     if elementName == "b", let currentStopID {
-      let vehicleId = attributeDict["id"]?.nilIfBlank
+      let vehicleID = attributeDict["id"]?.nilIfBlank
       if let existing = liveStops[currentStopID] {
         liveStops[currentStopID] = FavoriteWidgetLiveStop(
           sec: existing.sec,
           msg: existing.msg,
-          vehicleId: existing.vehicleId ?? vehicleId
+          vehicleId: existing.vehicleId ?? vehicleID
         )
       }
     }
@@ -428,7 +428,12 @@ private enum FavoriteWidgetDeepLink {
     return components.url
   }
 
-  static func route(provider: String, routeKey: Int, pathId: Int, stopId: Int) -> URL? {
+  static func route(
+    provider: String,
+    routeKey: Int,
+    pathId: Int,
+    stopId: Int
+  ) -> URL? {
     var components = URLComponents()
     components.scheme = "yabus"
     components.host = "route"
@@ -453,8 +458,8 @@ struct FavoriteGroupWidget: Widget {
     ) { entry in
       FavoriteGroupWidgetView(entry: entry)
     }
-    .configurationDisplayName("最愛小工具")
-    .description("在主畫面或鎖定畫面查看最愛站牌的到站時間。")
+    .configurationDisplayName("Favorite Stops")
+    .description("View favorite stop ETAs on the Home Screen or Lock Screen.")
     .supportedFamilies([
       .systemSmall,
       .systemMedium,
@@ -470,6 +475,7 @@ private struct FavoriteGroupWidgetView: View {
 
   let entry: FavoriteGroupEntry
 
+  @ViewBuilder
   var body: some View {
     switch family {
     case .accessoryInline:
@@ -495,7 +501,9 @@ private struct FavoriteGroupWidgetView: View {
               .lineLimit(1)
           }
         }
+
         Spacer(minLength: 8)
+
         if let lastUpdated = entry.lastUpdated {
           Text(lastUpdated, style: .time)
             .font(.caption2)
@@ -505,7 +513,7 @@ private struct FavoriteGroupWidgetView: View {
 
       if entry.items.isEmpty {
         Spacer(minLength: 0)
-        Text(entry.statusMessage ?? "尚無資料")
+        Text(entry.statusMessage ?? "No data")
           .font(.callout)
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.leading)
@@ -557,14 +565,16 @@ private struct FavoriteGroupWidgetView: View {
               .foregroundStyle(.secondary)
               .lineLimit(1)
           }
+
           Spacer(minLength: 8)
+
           Text(firstItem.etaText)
             .font(.headline)
             .fontWeight(.bold)
             .lineLimit(1)
         }
       } else {
-        Text(entry.statusMessage ?? "尚無資料")
+        Text(entry.statusMessage ?? "No data")
           .font(.caption)
           .foregroundStyle(.secondary)
           .lineLimit(2)
@@ -615,7 +625,9 @@ private struct FavoriteGroupWidgetView: View {
           .foregroundStyle(.secondary)
           .lineLimit(1)
       }
+
       Spacer(minLength: 8)
+
       VStack(alignment: .trailing, spacing: 2) {
         Text(item.etaText)
           .font(.headline)
