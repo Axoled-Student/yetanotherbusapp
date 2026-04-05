@@ -63,10 +63,10 @@ private struct FavoriteWidgetLiveStop: Hashable {
 }
 
 struct FavoriteGroupConfigurationIntent: WidgetConfigurationIntent {
-  static var title: LocalizedStringResource = "Favorite Group"
-  static var description = IntentDescription("Show ETA for one favorite group.")
+  static var title: LocalizedStringResource = "我的最愛群組"
+  static var description = IntentDescription("顯示單一最愛群組的到站時間。")
 
-  @Parameter(title: "Group", optionsProvider: FavoriteGroupOptionsProvider())
+  @Parameter(title: "群組", optionsProvider: FavoriteGroupOptionsProvider())
   var groupName: String?
 }
 
@@ -80,21 +80,21 @@ struct FavoriteGroupTimelineProvider: AppIntentTimelineProvider {
   func placeholder(in context: Context) -> FavoriteGroupEntry {
     FavoriteGroupEntry(
       date: .now,
-      groupName: "Favorites",
+      groupName: "我的最愛",
       items: [
         FavoriteWidgetItem(
           id: "sample-1",
           routeName: "307",
-          stopName: "Taipei Main Station",
-          etaText: "3m",
+          stopName: "臺北車站",
+          etaText: "3分",
           noteText: "YABus",
           routeURL: nil
         ),
         FavoriteWidgetItem(
           id: "sample-2",
-          routeName: "Green 3",
-          stopName: "Chung Shan Medical University",
-          etaText: "8m",
+          routeName: "綠3",
+          stopName: "中山醫學大學",
+          etaText: "8分",
           noteText: "YABus",
           routeURL: nil
         ),
@@ -131,9 +131,9 @@ private enum FavoriteGroupEntryLoader {
     guard !groups.isEmpty else {
       return FavoriteGroupEntry(
         date: .now,
-        groupName: "Favorites",
+        groupName: "我的最愛",
         items: [],
-        statusMessage: "Create favorites in the app first.",
+        statusMessage: "請先在 App 內加入我的最愛。",
         lastUpdated: nil,
         groupURL: nil
       )
@@ -150,7 +150,7 @@ private enum FavoriteGroupEntryLoader {
         date: .now,
         groupName: selectedName,
         items: [],
-        statusMessage: "This group has no saved stops yet.",
+        statusMessage: "這個群組目前還沒有儲存站牌。",
         lastUpdated: nil,
         groupURL: FavoriteWidgetDeepLink.group(named: selectedName)
       )
@@ -161,7 +161,7 @@ private enum FavoriteGroupEntryLoader {
       date: .now,
       groupName: selectedName,
       items: fetchResult.items,
-      statusMessage: fetchResult.didFetchLiveData ? nil : "Unable to refresh right now.",
+      statusMessage: fetchResult.didFetchLiveData ? nil : "目前無法更新。",
       lastUpdated: fetchResult.didFetchLiveData ? Date() : nil,
       groupURL: FavoriteWidgetDeepLink.group(named: selectedName)
     )
@@ -199,8 +199,8 @@ private enum FavoriteWidgetRouteFetcher {
       let liveStop = liveStopsByRoute[routeRequestKey(for: favorite)]?[favorite.stopId]
       return FavoriteWidgetItem(
         id: "\(favorite.provider):\(favorite.routeKey):\(favorite.pathId):\(favorite.stopId)",
-        routeName: favorite.routeName?.nilIfBlank ?? "Route \(favorite.routeKey)",
-        stopName: favorite.stopName?.nilIfBlank ?? "Stop \(favorite.stopId)",
+        routeName: favorite.routeName?.nilIfBlank ?? "路線 \(favorite.routeKey)",
+        stopName: favorite.stopName?.nilIfBlank ?? "站牌 \(favorite.stopId)",
         etaText: formatETA(liveStop),
         noteText: liveStop?.vehicleId?.nilIfBlank ?? favorite.provider.uppercased(),
         routeURL: FavoriteWidgetDeepLink.route(
@@ -359,12 +359,12 @@ private enum FavoriteWidgetRouteFetcher {
       return "--"
     }
     if seconds <= 0 {
-      return "Arriving"
+      return "進站中"
     }
     if seconds < 60 {
-      return "<1m"
+      return "1分內"
     }
-    return "\(seconds / 60)m"
+    return "\(seconds / 60)分"
   }
 }
 
@@ -465,8 +465,8 @@ struct FavoriteGroupWidget: Widget {
     ) { entry in
       FavoriteGroupWidgetView(entry: entry)
     }
-    .configurationDisplayName("Favorite Stops")
-    .description("View favorite stop ETAs on the Home Screen or Lock Screen.")
+    .configurationDisplayName("我的最愛站牌")
+    .description("在主畫面或鎖定畫面查看最愛站牌的到站時間。")
     .supportedFamilies([
       .systemSmall,
       .systemMedium,
@@ -520,7 +520,7 @@ private struct FavoriteGroupWidgetView: View {
 
       if entry.items.isEmpty {
         Spacer(minLength: 0)
-        Text(entry.statusMessage ?? "No data")
+        Text(entry.statusMessage ?? "沒有資料")
           .font(.callout)
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.leading)
@@ -581,7 +581,7 @@ private struct FavoriteGroupWidgetView: View {
             .lineLimit(1)
         }
       } else {
-        Text(entry.statusMessage ?? "No data")
+        Text(entry.statusMessage ?? "沒有資料")
           .font(.caption)
           .foregroundStyle(.secondary)
           .lineLimit(2)
