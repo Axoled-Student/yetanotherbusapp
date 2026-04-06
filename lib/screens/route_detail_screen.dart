@@ -268,7 +268,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     _targetInitialPathId = detail.paths[initialIndex].pathId;
     final selectedIndex = _tabController == null
         ? initialIndex
-        : _tabController!.index.clamp(0, pathIds.length - 1) as int;
+        : _tabController!.index.clamp(0, pathIds.length - 1);
 
     if (_tabController?.length == pathIds.length) {
       _tabController!.index = selectedIndex;
@@ -601,7 +601,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     final viewport = scrollController.position.viewportDimension;
     final targetOffset = (maxScrollExtent * stopRatio) - (viewport * alignment);
     await scrollController.animateTo(
-      targetOffset.clamp(0.0, maxScrollExtent) as double,
+      targetOffset.clamp(0.0, maxScrollExtent),
       duration: duration,
       curve: Curves.easeOutCubic,
     );
@@ -1635,7 +1635,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     required int anchorIndex,
     int? highlightedIndex,
   }) {
-    final clampedAnchorIndex = anchorIndex.clamp(0, pathStops.length - 1) as int;
+    final clampedAnchorIndex = anchorIndex.clamp(0, pathStops.length - 1);
     var startIndex = math.max(0, clampedAnchorIndex - 2);
     var endIndex = math.min(pathStops.length, startIndex + 5);
     startIndex = math.max(0, endIndex - 5);
