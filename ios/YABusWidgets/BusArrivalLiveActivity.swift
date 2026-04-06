@@ -281,47 +281,88 @@ struct BusArrivalLiveActivity: Widget {
 
   @ViewBuilder
   private func stopLineView(_ state: BusArrivalAttributes.ContentState) -> some View {
-    let previousStopName = trimmedText(state.previousStopName)
-    let nextStopName = trimmedText(state.nextStopName)
-    let currentStopName = displayStopName(state)
-
-    if previousStopName == nil && nextStopName == nil {
-      HStack {
-        Spacer(minLength: 0)
-        stopLineLabel(currentStopName, alignment: .center, emphasis: true)
-        Spacer(minLength: 0)
-      }
-    } else {
+    if let stopLine = stopLineData(state) {
       VStack(spacing: 6) {
         HStack(spacing: 0) {
-          stopMarker(isCurrent: false, isAvailable: previousStopName != nil)
-          stopConnector(isActive: previousStopName != nil || nextStopName != nil)
-          stopMarker(isCurrent: true, isAvailable: true)
-          stopConnector(isActive: nextStopName != nil)
-          stopMarker(isCurrent: false, isAvailable: nextStopName != nil)
+          ForEach(stopLine.stopNames.indices, id: \.self) { index in
+            stopMarker(
+              isCurrent: index == stopLine.currentStopIndex,
+              isHighlighted: index == stopLine.highlightedStopIndex
+            )
+            .frame(width: 18)
+
+            if index < stopLine.stopNames.count - 1 {
+              stopConnector(
+                intensity: stopConnectorOpacity(
+                  currentStopIndex: stopLine.currentStopIndex,
+                  connectorIndex: index
+                )
+              )
+            }
+          }
         }
 
-        HStack(alignment: .center, spacing: 8) {
-          stopLineLabel(
-            previousStopName ?? "起點",
-            alignment: .leading,
-            emphasis: false
-          )
-          stopLineLabel(currentStopName, alignment: .center, emphasis: true)
-          stopLineLabel(
-            nextStopName ?? "終點",
-            alignment: .trailing,
-            emphasis: false
-          )
+        HStack(alignment: .top, spacing: 6) {
+          ForEach(stopLine.stopNames.indices, id: \.self) { index in
+            stopLineLabel(
+              stopLine.stopNames[index],
+              isCurrent: index == stopLine.currentStopIndex,
+              isHighlighted: index == stopLine.highlightedStopIndex
+            )
+          }
+        }
+      }
+    } else {
+      let previousStopName = trimmedText(state.previousStopName)
+      let nextStopName = trimmedText(state.nextStopName)
+      let currentStopName = displayStopName(state)
+
+      if previousStopName == nil && nextStopName == nil {
+        HStack {
+          Spacer(minLength: 0)
+          stopLineLabel(currentStopName, isCurrent: true, isHighlighted: true)
+          Spacer(minLength: 0)
+        }
+      } else {
+        VStack(spacing: 6) {
+          HStack(spacing: 0) {
+            stopMarker(isCurrent: false, isHighlighted: false)
+              .frame(width: 18)
+            stopConnector(intensity: 0.4)
+            stopMarker(isCurrent: true, isHighlighted: true)
+              .frame(width: 18)
+            stopConnector(intensity: 0.22)
+            stopMarker(isCurrent: false, isHighlighted: false)
+              .frame(width: 18)
+          }
+
+          HStack(alignment: .center, spacing: 8) {
+            stopLineLabel(
+              previousStopName ?? "起點",
+              isCurrent: false,
+              isHighlighted: false
+            )
+            stopLineLabel(currentStopName, isCurrent: true, isHighlighted: true)
+            stopLineLabel(
+              nextStopName ?? "終點",
+              isCurrent: false,
+              isHighlighted: false
+            )
+          }
         }
       }
     }
   }
 
   @ViewBuilder
-  private func stopMarker(isCurrent: Bool, isAvailable: Bool) -> some View {
+  private func stopMarker(isCurrent: Bool, isHighlighted: Bool) -> some View {
     if isCurrent {
       ZStack {
+        if isHighlighted {
+          Circle()
+            .stroke(Color.white.opacity(0.75), lineWidth: 2)
+            .frame(width: 20, height: 20)
+        }
         Circle()
           .fill(Color(red: 0.0, green: 0.74, blue: 0.83))
           .frame(width: 16, height: 16)
@@ -329,17 +370,25 @@ struct BusArrivalLiveActivity: Widget {
           .font(.system(size: 8, weight: .bold))
           .foregroundStyle(.white)
       }
+    } else if isHighlighted {
+      Circle()
+        .strokeBorder(Color(red: 0.0, green: 0.74, blue: 0.83), lineWidth: 2)
+        .background(
+          Circle()
+            .fill(Color(red: 0.0, green: 0.74, blue: 0.83).opacity(0.18))
+        )
+        .frame(width: 12, height: 12)
     } else {
       Circle()
-        .fill(Color.white.opacity(isAvailable ? 0.58 : 0.16))
+        .fill(Color.white.opacity(0.38))
         .frame(width: 8, height: 8)
     }
   }
 
   @ViewBuilder
-  private func stopConnector(isActive: Bool) -> some View {
+  private func stopConnector(intensity: Double) -> some View {
     Capsule(style: .continuous)
-      .fill(Color.white.opacity(isActive ? 0.34 : 0.12))
+      .fill(Color.white.opacity(intensity))
       .frame(maxWidth: .infinity)
       .frame(height: 2)
       .padding(.horizontal, 6)
@@ -348,19 +397,74 @@ struct BusArrivalLiveActivity: Widget {
   @ViewBuilder
   private func stopLineLabel(
     _ text: String,
-    alignment: Alignment,
-    emphasis: Bool
+    isCurrent: Bool,
+    isHighlighted: Bool
   ) -> some View {
     Text(text)
       .font(
         .system(
-          size: emphasis ? 12 : 11,
-          weight: emphasis ? .semibold : .medium
+          size: isCurrent ? 11 : 10,
+          weight: isCurrent || isHighlighted ? .semibold : .medium
         )
       )
-      .foregroundStyle(emphasis ? Color.white : Color.white.opacity(0.72))
-      .lineLimit(1)
-      .frame(maxWidth: .infinity, alignment: alignment)
+      .foregroundStyle(stopLineLabelColor(isCurrent: isCurrent, isHighlighted: isHighlighted))
+      .lineLimit(2)
+      .minimumScaleFactor(0.7)
+      .multilineTextAlignment(.center)
+      .frame(maxWidth: .infinity, alignment: .top)
+  }
+
+  private func stopLineData(
+    _ state: BusArrivalAttributes.ContentState
+  ) -> StopLineData? {
+    guard !state.lineStopNames.isEmpty else {
+      return nil
+    }
+
+    let currentStopIndex = normalizedStopLineIndex(
+      state.lineCurrentStopIndex,
+      count: state.lineStopNames.count
+    ) ?? 0
+    let highlightedStopIndex = normalizedStopLineIndex(
+      state.lineHighlightedStopIndex,
+      count: state.lineStopNames.count
+    )
+
+    return StopLineData(
+      stopNames: state.lineStopNames,
+      currentStopIndex: currentStopIndex,
+      highlightedStopIndex: highlightedStopIndex
+    )
+  }
+
+  private func normalizedStopLineIndex(
+    _ index: Int?,
+    count: Int
+  ) -> Int? {
+    guard let index, count > 0, index >= 0, index < count else {
+      return nil
+    }
+    return index
+  }
+
+  private func stopConnectorOpacity(
+    currentStopIndex: Int,
+    connectorIndex: Int
+  ) -> Double {
+    return connectorIndex < currentStopIndex ? 0.46 : 0.18
+  }
+
+  private func stopLineLabelColor(
+    isCurrent: Bool,
+    isHighlighted: Bool
+  ) -> Color {
+    if isCurrent {
+      return .white
+    }
+    if isHighlighted {
+      return Color(red: 0.55, green: 0.9, blue: 0.98)
+    }
+    return Color.white.opacity(0.68)
   }
 
   @ViewBuilder
@@ -493,6 +597,12 @@ private enum CountdownStyle {
   case compact
   case minimal
   case expanded
+}
+
+private struct StopLineData {
+  let stopNames: [String]
+  let currentStopIndex: Int
+  let highlightedStopIndex: Int?
 }
 
 private enum BusArrivalDeepLink {

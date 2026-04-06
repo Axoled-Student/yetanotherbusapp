@@ -48,6 +48,9 @@ void main() {
       stopName: '西門町',
       previousStopName: '臺北車站',
       nextStopName: '龍山寺',
+      lineStopNames: const ['臺北車站', '北門', '西門町', '龍山寺', '板橋車站'],
+      lineCurrentStopIndex: 1,
+      lineHighlightedStopIndex: 2,
       modeLabel: '尚未上車',
       etaSeconds: 300,
       progressValue: 2,
@@ -78,6 +81,9 @@ void main() {
     expect(args['displayStopName'], '西門町');
     expect(args['previousStopName'], '臺北車站');
     expect(args['nextStopName'], '龍山寺');
+    expect(args['lineStopNames'], ['臺北車站', '北門', '西門町', '龍山寺', '板橋車站']);
+    expect(args['lineCurrentStopIndex'], 1);
+    expect(args['lineHighlightedStopIndex'], 2);
     expect(args['modeLabel'], '尚未上車');
     expect(args['etaSeconds'], 300);
     expect(args['progressValue'], 2);
@@ -103,6 +109,9 @@ void main() {
         stopName: '龍山寺',
         previousStopName: '西門町',
         nextStopName: '板橋車站',
+        lineStopNames: ['西門町', '龍山寺', '萬華車站', '板橋車站', '埔墘'],
+        lineCurrentStopIndex: 1,
+        lineHighlightedStopIndex: 3,
         modeLabel: '已上車',
         statusText: '最近站牌 西門町',
         etaMessage: '進站中',
@@ -116,6 +125,9 @@ void main() {
     expect(args['displayStopName'], '龍山寺');
     expect(args['previousStopName'], '西門町');
     expect(args['nextStopName'], '板橋車站');
+    expect(args['lineStopNames'], ['西門町', '龍山寺', '萬華車站', '板橋車站', '埔墘']);
+    expect(args['lineCurrentStopIndex'], 1);
+    expect(args['lineHighlightedStopIndex'], 3);
     expect(args['modeLabel'], '已上車');
     expect(args['statusText'], '最近站牌 西門町');
     expect(args['etaMessage'], '進站中');

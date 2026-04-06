@@ -33,6 +33,9 @@ class RunnerTests: XCTestCase {
       displayStopName: "臺北車站",
       previousStopName: nil,
       nextStopName: "西門町",
+      lineStopNames: ["臺北車站", "北門", "西門町", "龍山寺", "板橋車站"],
+      lineCurrentStopIndex: 1,
+      lineHighlightedStopIndex: 2,
       modeLabel: "尚未上車",
       statusText: "往板橋 · 上車站 臺北車站",
       etaSeconds: 125,
@@ -53,6 +56,9 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual(decoded.displayStopName, "臺北車站")
     XCTAssertNil(decoded.previousStopName)
     XCTAssertEqual(decoded.nextStopName, "西門町")
+    XCTAssertEqual(decoded.lineStopNames, ["臺北車站", "北門", "西門町", "龍山寺", "板橋車站"])
+    XCTAssertEqual(decoded.lineCurrentStopIndex, 1)
+    XCTAssertEqual(decoded.lineHighlightedStopIndex, 2)
     XCTAssertEqual(decoded.modeLabel, "尚未上車")
     XCTAssertEqual(decoded.statusText, "往板橋 · 上車站 臺北車站")
     XCTAssertEqual(decoded.etaSeconds, 125)
@@ -69,6 +75,9 @@ class RunnerTests: XCTestCase {
       displayStopName: "西門町",
       previousStopName: "臺北車站",
       nextStopName: "龍山寺",
+      lineStopNames: ["臺北車站", "北門", "西門町", "龍山寺", "板橋車站"],
+      lineCurrentStopIndex: 2,
+      lineHighlightedStopIndex: 2,
       modeLabel: nil,
       statusText: "最近站牌 西門町",
       etaSeconds: nil,
@@ -87,6 +96,9 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual(decoded.displayStopName, "西門町")
     XCTAssertEqual(decoded.previousStopName, "臺北車站")
     XCTAssertEqual(decoded.nextStopName, "龍山寺")
+    XCTAssertEqual(decoded.lineStopNames, ["臺北車站", "北門", "西門町", "龍山寺", "板橋車站"])
+    XCTAssertEqual(decoded.lineCurrentStopIndex, 2)
+    XCTAssertEqual(decoded.lineHighlightedStopIndex, 2)
     XCTAssertEqual(decoded.statusText, "最近站牌 西門町")
     XCTAssertNil(decoded.etaSeconds)
     XCTAssertEqual(decoded.etaMessage, "即將進站")
@@ -101,6 +113,9 @@ class RunnerTests: XCTestCase {
       displayStopName: "龍山寺",
       previousStopName: "西門町",
       nextStopName: "板橋車站",
+      lineStopNames: ["西門町", "龍山寺", "萬華車站", "板橋車站", "埔墘"],
+      lineCurrentStopIndex: 1,
+      lineHighlightedStopIndex: 3,
       modeLabel: "已上車",
       statusText: "已上車 · 最近站牌 西門町",
       etaSeconds: 60,
@@ -116,6 +131,9 @@ class RunnerTests: XCTestCase {
       displayStopName: "龍山寺",
       previousStopName: "西門町",
       nextStopName: "板橋車站",
+      lineStopNames: ["西門町", "龍山寺", "萬華車站", "板橋車站", "埔墘"],
+      lineCurrentStopIndex: 1,
+      lineHighlightedStopIndex: 3,
       modeLabel: "已上車",
       statusText: "已上車 · 最近站牌 西門町",
       etaSeconds: 60,
@@ -137,6 +155,9 @@ class RunnerTests: XCTestCase {
       displayStopName: "龍山寺",
       previousStopName: "西門町",
       nextStopName: "板橋車站",
+      lineStopNames: ["西門町", "龍山寺", "萬華車站", "板橋車站", "埔墘"],
+      lineCurrentStopIndex: 1,
+      lineHighlightedStopIndex: 3,
       modeLabel: "已上車",
       statusText: "已上車 · 最近站牌 西門町",
       etaSeconds: 125,
@@ -161,6 +182,9 @@ class RunnerTests: XCTestCase {
       displayStopName: "西門町",
       previousStopName: "臺北車站",
       nextStopName: "龍山寺",
+      lineStopNames: ["臺北車站", "北門", "西門町", "龍山寺", "板橋車站"],
+      lineCurrentStopIndex: 2,
+      lineHighlightedStopIndex: 2,
       modeLabel: nil,
       statusText: "最近站牌 西門町",
       etaSeconds: 45,
@@ -181,6 +205,9 @@ class RunnerTests: XCTestCase {
       displayStopName: "板橋公車站",
       previousStopName: "龍山寺",
       nextStopName: nil,
+      lineStopNames: ["西門町", "龍山寺", "萬華車站", "板橋車站", "埔墘"],
+      lineCurrentStopIndex: 3,
+      lineHighlightedStopIndex: 3,
       modeLabel: "尚未上車",
       statusText: "公車還有 8 站",
       etaSeconds: 3_900,

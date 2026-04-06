@@ -7,6 +7,9 @@ class LiveActivityDisplayState {
     required this.stopName,
     this.previousStopName,
     this.nextStopName,
+    this.lineStopNames,
+    this.lineCurrentStopIndex,
+    this.lineHighlightedStopIndex,
     this.modeLabel,
     this.statusText,
     this.etaSeconds,
@@ -20,6 +23,9 @@ class LiveActivityDisplayState {
   final String stopName;
   final String? previousStopName;
   final String? nextStopName;
+  final List<String>? lineStopNames;
+  final int? lineCurrentStopIndex;
+  final int? lineHighlightedStopIndex;
   final String? modeLabel;
   final String? statusText;
   final int? etaSeconds;
@@ -34,6 +40,9 @@ class LiveActivityDisplayState {
       'displayStopName': stopName,
       'previousStopName': previousStopName,
       'nextStopName': nextStopName,
+      'lineStopNames': lineStopNames,
+      'lineCurrentStopIndex': lineCurrentStopIndex,
+      'lineHighlightedStopIndex': lineHighlightedStopIndex,
       'modeLabel': modeLabel,
       'statusText': statusText,
       'etaSeconds': etaSeconds,

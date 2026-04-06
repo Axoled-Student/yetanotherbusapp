@@ -72,6 +72,9 @@ final class LiveActivityBridge {
     let displayStopName = args["displayStopName"] as? String ?? ""
     let previousStopName = args["previousStopName"] as? String
     let nextStopName = args["nextStopName"] as? String
+    let lineStopNames = args["lineStopNames"] as? [String] ?? []
+    let lineCurrentStopIndex = args["lineCurrentStopIndex"] as? Int
+    let lineHighlightedStopIndex = args["lineHighlightedStopIndex"] as? Int
     let modeLabel = args["modeLabel"] as? String
     let statusText = args["statusText"] as? String
 
@@ -96,6 +99,9 @@ final class LiveActivityBridge {
       displayStopName: displayStopName,
       previousStopName: previousStopName,
       nextStopName: nextStopName,
+      lineStopNames: lineStopNames,
+      lineCurrentStopIndex: lineCurrentStopIndex,
+      lineHighlightedStopIndex: lineHighlightedStopIndex,
       modeLabel: modeLabel,
       statusText: statusText,
       etaSeconds: etaSeconds,
@@ -140,6 +146,9 @@ final class LiveActivityBridge {
     let displayStopName = args["displayStopName"] as? String ?? ""
     let previousStopName = args["previousStopName"] as? String
     let nextStopName = args["nextStopName"] as? String
+    let lineStopNames = args["lineStopNames"] as? [String] ?? []
+    let lineCurrentStopIndex = args["lineCurrentStopIndex"] as? Int
+    let lineHighlightedStopIndex = args["lineHighlightedStopIndex"] as? Int
     let modeLabel = args["modeLabel"] as? String
     let statusText = args["statusText"] as? String
     let etaSeconds = args["etaSeconds"] as? Int
@@ -153,6 +162,9 @@ final class LiveActivityBridge {
       displayStopName: displayStopName,
       previousStopName: previousStopName,
       nextStopName: nextStopName,
+      lineStopNames: lineStopNames,
+      lineCurrentStopIndex: lineCurrentStopIndex,
+      lineHighlightedStopIndex: lineHighlightedStopIndex,
       modeLabel: modeLabel,
       statusText: statusText,
       etaSeconds: etaSeconds,
@@ -220,6 +232,9 @@ final class LiveActivityBridge {
       displayStopName: "",
       previousStopName: nil,
       nextStopName: nil,
+      lineStopNames: [],
+      lineCurrentStopIndex: nil,
+      lineHighlightedStopIndex: nil,
       modeLabel: nil,
       statusText: nil,
       etaSeconds: nil,

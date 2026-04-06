@@ -13,6 +13,9 @@ struct BusArrivalAttributes: ActivityAttributes {
     let displayStopName: String
     let previousStopName: String?
     let nextStopName: String?
+    let lineStopNames: [String]
+    let lineCurrentStopIndex: Int?
+    let lineHighlightedStopIndex: Int?
     let modeLabel: String?
     let statusText: String?
     let etaSeconds: Int?
