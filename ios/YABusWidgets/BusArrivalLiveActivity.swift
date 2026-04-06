@@ -142,7 +142,7 @@ struct BusArrivalLiveActivity: Widget {
     context: ActivityViewContext<BusArrivalAttributes>
   ) -> some View {
     VStack(spacing: 8) {
-      progressBar(context.state)
+      stopLineView(context.state)
 
       HStack {
         if let statusText = trimmedText(context.state.statusText) {
@@ -193,7 +193,7 @@ struct BusArrivalLiveActivity: Widget {
             .lineLimit(2)
         }
 
-        progressBar(context.state)
+        stopLineView(context.state)
           .padding(.top, 2)
       }
 
@@ -277,6 +277,90 @@ struct BusArrivalLiveActivity: Widget {
         Capsule(style: .continuous)
           .fill(Color.white.opacity(0.14))
       )
+  }
+
+  @ViewBuilder
+  private func stopLineView(_ state: BusArrivalAttributes.ContentState) -> some View {
+    let previousStopName = trimmedText(state.previousStopName)
+    let nextStopName = trimmedText(state.nextStopName)
+    let currentStopName = displayStopName(state)
+
+    if previousStopName == nil && nextStopName == nil {
+      HStack {
+        Spacer(minLength: 0)
+        stopLineLabel(currentStopName, alignment: .center, emphasis: true)
+        Spacer(minLength: 0)
+      }
+    } else {
+      VStack(spacing: 6) {
+        HStack(spacing: 0) {
+          stopMarker(isCurrent: false, isAvailable: previousStopName != nil)
+          stopConnector(isActive: previousStopName != nil || nextStopName != nil)
+          stopMarker(isCurrent: true, isAvailable: true)
+          stopConnector(isActive: nextStopName != nil)
+          stopMarker(isCurrent: false, isAvailable: nextStopName != nil)
+        }
+
+        HStack(alignment: .center, spacing: 8) {
+          stopLineLabel(
+            previousStopName ?? "起點",
+            alignment: .leading,
+            emphasis: false
+          )
+          stopLineLabel(currentStopName, alignment: .center, emphasis: true)
+          stopLineLabel(
+            nextStopName ?? "終點",
+            alignment: .trailing,
+            emphasis: false
+          )
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func stopMarker(isCurrent: Bool, isAvailable: Bool) -> some View {
+    if isCurrent {
+      ZStack {
+        Circle()
+          .fill(Color(red: 0.0, green: 0.74, blue: 0.83))
+          .frame(width: 16, height: 16)
+        Image(systemName: "bus.fill")
+          .font(.system(size: 8, weight: .bold))
+          .foregroundStyle(.white)
+      }
+    } else {
+      Circle()
+        .fill(Color.white.opacity(isAvailable ? 0.58 : 0.16))
+        .frame(width: 8, height: 8)
+    }
+  }
+
+  @ViewBuilder
+  private func stopConnector(isActive: Bool) -> some View {
+    Capsule(style: .continuous)
+      .fill(Color.white.opacity(isActive ? 0.34 : 0.12))
+      .frame(maxWidth: .infinity)
+      .frame(height: 2)
+      .padding(.horizontal, 6)
+  }
+
+  @ViewBuilder
+  private func stopLineLabel(
+    _ text: String,
+    alignment: Alignment,
+    emphasis: Bool
+  ) -> some View {
+    Text(text)
+      .font(
+        .system(
+          size: emphasis ? 12 : 11,
+          weight: emphasis ? .semibold : .medium
+        )
+      )
+      .foregroundStyle(emphasis ? Color.white : Color.white.opacity(0.72))
+      .lineLimit(1)
+      .frame(maxWidth: .infinity, alignment: alignment)
   }
 
   @ViewBuilder
