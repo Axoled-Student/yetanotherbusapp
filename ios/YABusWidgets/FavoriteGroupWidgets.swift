@@ -25,7 +25,10 @@ enum FavoriteWidgetSharedStore {
   }
 
   static func loadFavoriteGroupNames() -> [String] {
-    loadFavoriteGroups().keys.sorted()
+    loadFavoriteGroups().keys
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+      .sorted()
   }
 }
 
@@ -63,16 +66,33 @@ private struct FavoriteWidgetLiveStop: Hashable {
 }
 
 struct FavoriteGroupConfigurationIntent: WidgetConfigurationIntent {
-  static var title: LocalizedStringResource = "我的最愛群組"
-  static var description = IntentDescription("顯示單一最愛群組的到站時間。")
+  static var title: LocalizedStringResource =
+    "\u{6211}\u{7684}\u{6700}\u{611b}\u{7fa4}\u{7d44}"
+  static var description = IntentDescription(
+    "\u{986f}\u{793a}\u{55ae}\u{4e00}\u{6700}\u{611b}\u{7fa4}\u{7d44}\u{7684}\u{5230}\u{7ad9}\u{6642}\u{9593}\u{3002}"
+  )
 
-  @Parameter(title: "群組", optionsProvider: FavoriteGroupOptionsProvider())
+  @Parameter(
+    title: "\u{7fa4}\u{7d44}",
+    optionsProvider: FavoriteGroupOptionsProvider()
+  )
   var groupName: String?
 }
 
 struct FavoriteGroupOptionsProvider: DynamicOptionsProvider {
-  func results() async throws -> [String] {
-    FavoriteWidgetSharedStore.loadFavoriteGroupNames()
+  func results() async throws -> ItemCollection<String> {
+    let groupNames = FavoriteWidgetSharedStore.loadFavoriteGroupNames()
+    return ItemCollection {
+      ItemSection(
+        items: groupNames.map { groupName in
+          IntentItem(groupName)
+        }
+      )
+    }
+  }
+
+  func defaultResult() async -> String? {
+    FavoriteWidgetSharedStore.loadFavoriteGroupNames().first
   }
 }
 
