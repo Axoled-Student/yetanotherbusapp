@@ -55,6 +55,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   bool? _wakelockEnabled;
   bool _backgroundTripMonitorReady = false;
   bool _backgroundTripMonitorPromptInProgress = false;
+  bool _backgroundDataRefreshInFlight = false;
   bool _awaitingBackgroundLocationPermission = false;
   bool _destinationPromptShown = false;
   bool _liveActivityActive = false;
@@ -62,7 +63,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   int? _liveActivityPathId;
   bool _liveActivityBoardingWindowOpen = false;
   bool _liveActivityRideConfirmed = false;
+  bool _locationTrackingConfiguredForBackground = false;
   int? _liveActivityLastNearestStopIndex;
+  DateTime? _lastBackgroundDataRefreshAt;
   int? _requestedPathId;
   int? _requestedStopId;
   int? _targetInitialPathId;
@@ -121,15 +124,15 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appLifecycleState = state;
-    if (!_isAndroid) {
-      return;
-    }
     if (state == AppLifecycleState.resumed &&
         _awaitingBackgroundLocationPermission) {
       _awaitingBackgroundLocationPermission = false;
       unawaited(
         _configureBackgroundTripMonitorIfNeeded(forcePermissionCheck: true),
       );
+    }
+    if (!_isAndroid) {
+      return;
     }
     if (!AppControllerScope.read(
           context,
@@ -717,6 +720,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       }
       if (_isIOS) {
         await _stopLiveActivity();
+        await _ensureLocationTracking(requestPermissionIfNeeded: false);
       }
       return;
     }
@@ -731,6 +735,55 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     }
 
     if (_isIOS) {
+      if (!_backgroundTripMonitorReady || forcePermissionCheck) {
+        final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+        if (!serviceEnabled) {
+          _backgroundTripMonitorReady = false;
+          await _stopLiveActivity();
+          if (forcePermissionCheck && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('要使用背景乘車提醒，請先開啟定位服務。')),
+            );
+          }
+          return;
+        }
+
+        var permission = await Geolocator.checkPermission();
+        if (permission == LocationPermission.denied && forcePermissionCheck) {
+          permission = await Geolocator.requestPermission();
+        }
+        if (permission == LocationPermission.denied ||
+            permission == LocationPermission.deniedForever) {
+          _backgroundTripMonitorReady = false;
+          await _stopLiveActivity();
+          if (!forcePermissionCheck) {
+            return;
+          }
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('要使用背景乘車提醒，必須先允許定位權限。')),
+            );
+          }
+          return;
+        }
+        if (permission != LocationPermission.always) {
+          _backgroundTripMonitorReady = false;
+          await _stopLiveActivity();
+          if (!forcePermissionCheck) {
+            return;
+          }
+          final openSettings = await _showBackgroundLocationExplainer();
+          if (!mounted || openSettings != true) {
+            return;
+          }
+          _awaitingBackgroundLocationPermission = true;
+          await Geolocator.openAppSettings();
+          return;
+        }
+        _backgroundTripMonitorReady = true;
+      }
+
+      await _ensureLocationTracking(requestPermissionIfNeeded: false);
       await _syncLiveActivityForBackgroundMonitor(detail, pathInfo);
       return;
     }
@@ -816,12 +869,15 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   }
 
   Future<bool?> _showBackgroundLocationExplainer() {
+    final contentText = _isIOS
+        ? '要在把 app 丟到背景後持續更新下車提醒和靈動島，iPhone 需要將定位權限設為「永遠」。'
+        : '要在把 app 丟到背景後繼續提醒，Android 需要將定位權限設為「永遠允許」。';
     return showDialog<bool>(
       context: context,
       builder: (context) {
         return AlertDialog(
           title: const Text('允許背景定位'),
-          content: const Text('要在把 app 丟到背景後繼續提醒，Android 需要將定位權限設為「永遠允許」。'),
+          content: Text(contentText),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -965,11 +1021,19 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     }
   }
 
-  Future<void> _ensureLocationTracking() async {
-    if (_didAttemptLocationTracking) {
+  Future<void> _ensureLocationTracking({
+    bool requestPermissionIfNeeded = true,
+  }) async {
+    final controller = AppControllerScope.read(context);
+    final enableBackgroundLocationStream =
+        _isIOS &&
+        controller.settings.enableRouteBackgroundMonitor &&
+        _backgroundTripMonitorReady;
+    if (_didAttemptLocationTracking &&
+        _locationTrackingConfiguredForBackground ==
+            enableBackgroundLocationStream) {
       return;
     }
-    _didAttemptLocationTracking = true;
 
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
@@ -978,6 +1042,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
 
     var permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
+      if (!requestPermissionIfNeeded) {
+        return;
+      }
       permission = await Geolocator.requestPermission();
     }
     if (permission == LocationPermission.denied ||
@@ -996,12 +1063,26 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     }
     _updateNearestStops(current);
 
+    final locationSettings = enableBackgroundLocationStream
+        ? AppleSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 10,
+            pauseLocationUpdatesAutomatically: false,
+            activityType: ActivityType.automotiveNavigation,
+            showBackgroundLocationIndicator: false,
+            allowBackgroundLocationUpdates: true,
+          )
+        : const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 10,
+          );
+
+    await _positionSubscription?.cancel();
     _positionSubscription = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10,
-      ),
+      locationSettings: locationSettings,
     ).listen(_updateNearestStops);
+    _didAttemptLocationTracking = true;
+    _locationTrackingConfiguredForBackground = enableBackgroundLocationStream;
   }
 
   void _recalculateNearestStops() {
@@ -1062,6 +1143,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       }
     }
     _maybeScrollToCurrentLocation();
+    unawaited(_maybeRefreshBackgroundTripMonitor());
   }
 
   StopInfo? _currentBoardingCandidateStop() {
@@ -1527,6 +1609,68 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       setState(() {
         _liveActivityStopId = displayState.stopId;
       });
+    }
+  }
+
+  Future<void> _maybeRefreshBackgroundTripMonitor() async {
+    if (!_isIOS || _appIsForeground || _backgroundDataRefreshInFlight) {
+      return;
+    }
+
+    final controller = AppControllerScope.read(context);
+    if (!controller.settings.enableRouteBackgroundMonitor ||
+        !_backgroundTripMonitorReady) {
+      return;
+    }
+
+    final detail = _detail;
+    final pathInfo = _currentPathInfo;
+    if (detail == null || pathInfo == null) {
+      return;
+    }
+
+    final refreshIntervalSeconds = math.max(
+      controller.settings.busUpdateTime,
+      10,
+    );
+    final now = DateTime.now();
+    final lastRefreshAt = _lastBackgroundDataRefreshAt;
+    if (lastRefreshAt != null &&
+        now.difference(lastRefreshAt) <
+            Duration(seconds: refreshIntervalSeconds)) {
+      return;
+    }
+
+    _backgroundDataRefreshInFlight = true;
+    _lastBackgroundDataRefreshAt = now;
+    final previousDetail = _detail;
+    try {
+      final fetchedDetail = await controller.getRouteDetail(
+        widget.routeKey,
+        provider: widget.provider,
+      );
+      if (!mounted) {
+        return;
+      }
+
+      final displayDetail = !fetchedDetail.hasLiveData && previousDetail != null
+          ? _mergeDetailWithPreviousLiveData(fetchedDetail, previousDetail)
+          : fetchedDetail;
+      _syncTabController(displayDetail);
+      setState(() {
+        _detail = displayDetail;
+        _error = null;
+        _statusMessage = fetchedDetail.hasLiveData ? null : '即時資訊暫時無法取得';
+      });
+      _recalculateNearestStops();
+      await _syncLiveActivityForBackgroundMonitor(
+        displayDetail,
+        _currentPathInfo ?? pathInfo,
+      );
+    } catch (_) {
+      // Keep the existing detail and retry on the next throttled location update.
+    } finally {
+      _backgroundDataRefreshInFlight = false;
     }
   }
 
