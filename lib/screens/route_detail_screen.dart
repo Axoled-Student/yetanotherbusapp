@@ -1827,6 +1827,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
         displayDetail,
         _currentPathInfo ?? pathInfo,
       );
+      await _syncManualStopLiveActivityIfNeeded(displayDetail);
     } catch (_) {
       // Keep the existing detail and retry on the next throttled location update.
     } finally {
