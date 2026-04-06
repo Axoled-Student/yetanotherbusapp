@@ -59,6 +59,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   bool _awaitingBackgroundLocationPermission = false;
   bool _destinationPromptShown = false;
   bool _liveActivityActive = false;
+  bool _liveActivityFollowsBackgroundMonitor = false;
   int? _liveActivityStopId;
   int? _liveActivityPathId;
   bool _liveActivityBoardingWindowOpen = false;
@@ -199,6 +200,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       unawaited(_ensureLocationTracking());
       unawaited(_maybePromptForBackgroundTripMonitor());
       unawaited(_configureBackgroundTripMonitorIfNeeded());
+      unawaited(_syncManualStopLiveActivityIfNeeded(displayDetail));
     } catch (error) {
       if (!mounted) {
         return;
@@ -718,7 +720,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       if (_isAndroid) {
         await AndroidTripMonitor.stop();
       }
-      if (_isIOS) {
+      if (_isIOS && _liveActivityFollowsBackgroundMonitor) {
         await _stopLiveActivity();
         await _ensureLocationTracking(requestPermissionIfNeeded: false);
       }
@@ -728,7 +730,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     final detail = _detail;
     final pathInfo = _currentPathInfo;
     if (detail == null || pathInfo == null) {
-      if (_isIOS) {
+      if (_isIOS && _liveActivityFollowsBackgroundMonitor) {
         await _stopLiveActivity();
       }
       return;
@@ -739,7 +741,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
         final serviceEnabled = await Geolocator.isLocationServiceEnabled();
         if (!serviceEnabled) {
           _backgroundTripMonitorReady = false;
-          await _stopLiveActivity();
+          if (_liveActivityFollowsBackgroundMonitor) {
+            await _stopLiveActivity();
+          }
           if (forcePermissionCheck && mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('要使用背景乘車提醒，請先開啟定位服務。')),
@@ -755,7 +759,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
         if (permission == LocationPermission.denied ||
             permission == LocationPermission.deniedForever) {
           _backgroundTripMonitorReady = false;
-          await _stopLiveActivity();
+          if (_liveActivityFollowsBackgroundMonitor) {
+            await _stopLiveActivity();
+          }
           if (!forcePermissionCheck) {
             return;
           }
@@ -768,7 +774,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
         }
         if (permission != LocationPermission.always) {
           _backgroundTripMonitorReady = false;
-          await _stopLiveActivity();
+          if (_liveActivityFollowsBackgroundMonitor) {
+            await _stopLiveActivity();
+          }
           if (!forcePermissionCheck) {
             return;
           }
@@ -1203,6 +1211,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   Future<void> _startLiveActivity(
     PathInfo pathInfo,
     LiveActivityDisplayState displayState,
+    {
+    required bool followsBackgroundMonitor,
+  }
   ) async {
     final didStart = await LiveActivityService.startLiveActivity(
       routeName: _detail?.route.routeName ?? '',
@@ -1220,12 +1231,14 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     if (didStart) {
       setState(() {
         _liveActivityActive = true;
+        _liveActivityFollowsBackgroundMonitor = followsBackgroundMonitor;
         _liveActivityStopId = displayState.stopId;
         _liveActivityPathId = pathInfo.pathId;
       });
     } else {
       setState(() {
         _liveActivityActive = false;
+        _liveActivityFollowsBackgroundMonitor = false;
         _liveActivityStopId = null;
         _liveActivityPathId = null;
       });
@@ -1240,9 +1253,120 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     setState(() {
       _resetLiveActivityRideState();
       _liveActivityActive = false;
+      _liveActivityFollowsBackgroundMonitor = false;
       _liveActivityStopId = null;
       _liveActivityPathId = null;
     });
+  }
+
+  Future<void> _startStopLiveActivity(StopInfo stop) async {
+    final detail = _detail;
+    final pathInfo = _currentPathInfo;
+    if (detail == null || pathInfo == null) {
+      return;
+    }
+
+    final pathStops = detail.stopsByPath[pathInfo.pathId] ?? const <StopInfo>[];
+    final displayState = _buildTrackedStopLiveActivityState(
+      stop: stop,
+      pathInfo: pathInfo,
+      pathStops: pathStops,
+    );
+    await _startLiveActivity(
+      pathInfo,
+      displayState,
+      followsBackgroundMonitor: false,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    if (_liveActivityActive) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('已在動態島顯示 ${stop.stopName}。')));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('無法啟動動態島，請確認裝置支援。')),
+      );
+    }
+  }
+
+  LiveActivityDisplayState _buildTrackedStopLiveActivityState({
+    required StopInfo stop,
+    required PathInfo pathInfo,
+    required List<StopInfo> pathStops,
+  }) {
+    final stopIndex = pathStops.indexWhere((entry) => entry.stopId == stop.stopId);
+    final nextStopName = stopIndex != -1 && stopIndex + 1 < pathStops.length
+        ? pathStops[stopIndex + 1].stopName
+        : null;
+    final statusParts = <String>[
+      _pathStatusPrefix(pathInfo.name),
+      '站牌追蹤',
+      if (nextStopName != null) '下一站 $nextStopName',
+    ];
+
+    return LiveActivityDisplayState(
+      stopId: stop.stopId,
+      stopName: stop.stopName,
+      modeLabel: '站牌追蹤',
+      statusText: statusParts.join(' · '),
+      etaSeconds: stop.sec,
+      etaMessage: stop.msg,
+      vehicleId: _vehicleIdForStop(stop),
+    );
+  }
+
+  Future<void> _syncManualStopLiveActivityIfNeeded(RouteDetailData detail) async {
+    if (!_liveActivityActive ||
+        _liveActivityFollowsBackgroundMonitor ||
+        _liveActivityPathId == null ||
+        _liveActivityStopId == null) {
+      return;
+    }
+
+    final pathId = _liveActivityPathId!;
+    PathInfo? trackedPath;
+    for (final path in detail.paths) {
+      if (path.pathId == pathId) {
+        trackedPath = path;
+        break;
+      }
+    }
+    if (trackedPath == null) {
+      await _stopLiveActivity();
+      return;
+    }
+
+    final pathStops = detail.stopsByPath[pathId] ?? const <StopInfo>[];
+    StopInfo? trackedStop;
+    for (final stop in pathStops) {
+      if (stop.stopId == _liveActivityStopId) {
+        trackedStop = stop;
+        break;
+      }
+    }
+    if (trackedStop == null) {
+      await _stopLiveActivity();
+      return;
+    }
+
+    await LiveActivityService.updateLiveActivity(
+      _buildTrackedStopLiveActivityState(
+        stop: trackedStop,
+        pathInfo: trackedPath,
+        pathStops: pathStops,
+      ),
+    );
+  }
+
+  bool _isLiveActivityStop(StopInfo stop) {
+    return _liveActivityActive &&
+        !_liveActivityFollowsBackgroundMonitor &&
+        stop.stopId == _liveActivityStopId &&
+        stop.pathId == _liveActivityPathId;
   }
 
   int? _resolveNearestStopIndex(List<StopInfo> pathStops) {
@@ -1588,6 +1712,10 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     RouteDetailData detail,
     PathInfo pathInfo,
   ) async {
+    if (_liveActivityActive && !_liveActivityFollowsBackgroundMonitor) {
+      return;
+    }
+
     final displayState = _buildLiveActivityDisplayState(detail, pathInfo);
     if (displayState == null) {
       await _stopLiveActivity();
@@ -1597,7 +1725,11 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     final needsRestart =
         !_liveActivityActive || _liveActivityPathId != pathInfo.pathId;
     if (needsRestart) {
-      await _startLiveActivity(pathInfo, displayState);
+      await _startLiveActivity(
+        pathInfo,
+        displayState,
+        followsBackgroundMonitor: true,
+      );
       return;
     }
 
@@ -1798,6 +1930,12 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
                     Navigator.of(context).pop(_StopAction.shortcut),
                 child: const Text('新增到主畫面'),
               ),
+            if (_isIOS)
+              SimpleDialogOption(
+                onPressed: () =>
+                    Navigator.of(context).pop(_StopAction.liveActivity),
+                child: Text(_isLiveActivityStop(stop) ? '關閉動態島追蹤' : '顯示在動態島'),
+              ),
             SimpleDialogOption(
               onPressed: () => Navigator.of(context).pop(),
               child: const Text('取消'),
@@ -1816,6 +1954,12 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       await _handleDestinationAction(stop);
     } else if (action == _StopAction.shortcut) {
       await _handlePinnedShortcut(stop);
+    } else if (action == _StopAction.liveActivity) {
+      if (_isLiveActivityStop(stop)) {
+        await _stopLiveActivity();
+      } else {
+        await _startStopLiveActivity(stop);
+      }
     }
   }
 
@@ -1917,8 +2061,10 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     switch (action) {
       case _VehicleAction.toggleTracking:
         await _toggleTrackedVehicle(vehicle);
+        return;
       case _VehicleAction.twBusForum:
         await _openVehicleForum(vehicle.id);
+        return;
     }
   }
 
@@ -1929,6 +2075,15 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     required bool isNearest,
     required bool isDestination,
   }) {
+    if (_isLiveActivityStop(stop)) {
+      return const _RouteStatusPill(
+        icon: Icons.circle,
+        label: '動態島',
+        backgroundColor: Color(0xFF00BCD4),
+        foregroundColor: Colors.white,
+      );
+    }
+
     if (isDestination) {
       return _RouteStatusPill(
         icon: Icons.flag_rounded,
@@ -2020,6 +2175,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
         onTap: () => unawaited(_openStopActionsWithShortcut(stop)),
+        onLongPress: () => unawaited(_openStopActionsWithShortcut(stop)),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
           child: Row(
@@ -2096,6 +2252,12 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
                     ? Icons.flag_outlined
                     : Icons.flag_rounded,
               ),
+            ),
+          if (_isIOS && _liveActivityActive && !_liveActivityFollowsBackgroundMonitor)
+            IconButton(
+              onPressed: _stopLiveActivity,
+              icon: const Icon(Icons.stop_circle_rounded),
+              tooltip: '關閉動態島',
             ),
           IconButton(
             onPressed: _refresh,
@@ -2263,6 +2425,6 @@ class _RouteStatusPill extends StatelessWidget {
   }
 }
 
-enum _StopAction { favorite, destination, shortcut }
+enum _StopAction { favorite, destination, shortcut, liveActivity }
 
 enum _VehicleAction { toggleTracking, twBusForum }
