@@ -14,12 +14,14 @@ import '../core/route_direction_label.dart';
 import '../widgets/eta_badge.dart';
 import '../widgets/transit_station_map.dart';
 import '../widgets/transit_drawer.dart';
+import '../widgets/weather_app_bar_title.dart';
 import 'adaptive_settings_presenter.dart';
 import 'database_settings_screen.dart';
 import 'favorites_screen.dart';
 import 'nearby_screen.dart';
 import 'route_detail_navigation.dart';
 import 'search_screen.dart';
+import 'weather_screen.dart';
 import '../widgets/ad_banner_widget.dart';
 
 class HomeScreen extends StatelessWidget {
@@ -276,7 +278,16 @@ class HomeScreen extends StatelessWidget {
     return Scaffold(
       backgroundColor: hasBusBackgroundImage ? Colors.transparent : null,
       appBar: AppBar(
-        title: const Text('YABus'),
+        title: WeatherAppBarTitle(
+          title: 'YABus',
+          // The chip already has a fix; pass it on so the page loads at once.
+          onTap: (latitude, longitude) => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  WeatherScreen(latitude: latitude, longitude: longitude),
+            ),
+          ),
+        ),
         leading:
             MediaQuery.sizeOf(context).width >= kDesktopNavigationRailBreakpoint
             ? null

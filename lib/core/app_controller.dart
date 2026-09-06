@@ -1727,6 +1727,12 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> updateShowWeatherInAppBar(bool value) async {
+    _settings = _settings.copyWith(showWeatherInAppBar: value);
+    await _persistSettings();
+    notifyListeners();
+  }
+
   Future<void> updateEnableSmartRecommendations(bool value) async {
     _settings = _settings.copyWith(enableSmartRecommendations: value);
     await _persistSettings();
@@ -3047,6 +3053,7 @@ class AppController extends ChangeNotifier {
       _copyKnownKey(appearance, merged, 'homeBackgroundOpacity');
       _copyKnownKey(appearance, merged, 'overlayOpacity');
       _copyKnownKey(appearance, merged, 'enableCompactMode');
+      _copyKnownKey(appearance, merged, 'showWeatherInAppBar');
     }
 
     final usage = _stringMap(root['usage']);
@@ -3252,6 +3259,7 @@ Map<String, dynamic> _preferencesSyncPayloadFromSettings(AppSettings settings) {
       'homeBackgroundOpacity': json['homeBackgroundOpacity'],
       'overlayOpacity': json['overlayOpacity'],
       'enableCompactMode': json['enableCompactMode'],
+      'showWeatherInAppBar': json['showWeatherInAppBar'],
     },
     'usage': {
       'alwaysShowSeconds': json['alwaysShowSeconds'],
