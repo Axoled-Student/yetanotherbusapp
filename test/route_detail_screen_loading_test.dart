@@ -220,11 +220,43 @@ void _screenTest(
 }
 
 void main() {
+  _screenTest('delays then fades in route stops once data is ready', (
+    tester,
+    repository,
+  ) async {
+    expect(repository.primaryRequests, hasLength(1));
+    expect(find.byType(ListView), findsNothing);
+
+    repository.topologyRequests.single.complete(_detail());
+    await tester.pump();
+    await tester.pump();
+
+    final stopsFade = find.byKey(const ValueKey('route-stops-fade'));
+    expect(stopsFade, findsOneWidget);
+    expect(tester.widget<FadeTransition>(stopsFade).opacity.value, 0);
+
+    await tester.pump(const Duration(milliseconds: 499));
+    expect(tester.widget<FadeTransition>(stopsFade).opacity.value, 0);
+
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(
+      tester.widget<FadeTransition>(stopsFade).opacity.value,
+      greaterThan(0),
+    );
+    expect(tester.widget<FadeTransition>(stopsFade).opacity.value, lessThan(1));
+
+    repository.primaryRequests.single.complete(_detail(eta: 120));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(tester.widget<FadeTransition>(stopsFade).opacity.value, 1);
+  });
+
   _screenTest(
     'shows topology and loading ETA before realtime, then preserves scroll',
     (tester, repository) async {
       expect(find.text('標題提示'), findsOneWidget);
-      expect(find.text('正在準備 標題提示 的站牌資訊'), findsOneWidget);
+      expect(find.text('正在準備 標題提示 的站牌資訊'), findsNothing);
       expect(repository.topologyRequests, hasLength(1));
       expect(repository.primaryRequests, hasLength(1));
 

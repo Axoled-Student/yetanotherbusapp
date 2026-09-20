@@ -1189,18 +1189,19 @@ class _SmartRecommendationCardState extends State<_SmartRecommendationCard> {
     return FutureBuilder<_SmartCardData?>(
       future: _future,
       builder: (context, snapshot) {
+        final Widget state;
+        final String stateKey;
         if (snapshot.connectionState == ConnectionState.waiting &&
             !snapshot.hasData) {
-          return _SmartRecommendationShell(
+          stateKey = 'loading';
+          state = _SmartRecommendationShell(
             title: '智慧推薦',
-            child: Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Center(child: CircularProgressIndicator()),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: LinearProgressIndicator(minHeight: 4),
             ),
           );
-        }
-
-        if (snapshot.hasError) {
+        } else if (snapshot.hasError) {
           // return _SmartRecommendationShell(
           //   title: '智慧推薦',
           //   subtitle: '這個時段原本有學到偏好，但這次整理失敗了。',
@@ -1211,22 +1212,39 @@ class _SmartRecommendationCardState extends State<_SmartRecommendationCard> {
           //   ),
           //   child: Text('推薦整理失敗：${snapshot.error}'),
           // );
-          return const SizedBox.shrink();
+          stateKey = 'error';
+          state = const SizedBox.shrink();
+        } else if (snapshot.data == null) {
+          // return _buildEmptyState(context);
+          stateKey = 'empty';
+          state = const SizedBox.shrink();
+        } else if (snapshot.data!.suggestions.isNotEmpty) {
+          stateKey = 'suggestions';
+          state = _buildSuggestionListState(
+            context,
+            snapshot.data!.suggestions,
+          );
+        } else if (snapshot.data!.nearbyList.isNotEmpty) {
+          stateKey = 'nearby';
+          state = _buildNearbyFallbackListState(
+            context,
+            snapshot.data!.nearbyList,
+          );
+        } else {
+          // return _buildEmptyState(context);
+          stateKey = 'empty';
+          state = const SizedBox.shrink();
         }
 
-        final cardData = snapshot.data;
-        if (cardData == null) {
-          // return _buildEmptyState(context);
-          return const SizedBox.shrink();
-        }
-        if (cardData.suggestions.isNotEmpty) {
-          return _buildSuggestionListState(context, cardData.suggestions);
-        }
-        if (cardData.nearbyList.isNotEmpty) {
-          return _buildNearbyFallbackListState(context, cardData.nearbyList);
-        }
-        // return _buildEmptyState(context);
-        return const SizedBox.shrink();
+        return AnimatedSwitcher(
+          duration: const Duration(milliseconds: 320),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) {
+            return FadeTransition(opacity: animation, child: child);
+          },
+          child: KeyedSubtree(key: ValueKey(stateKey), child: state),
+        );
       },
     );
   }

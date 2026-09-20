@@ -27,7 +27,9 @@ class EtaBadge extends StatelessWidget {
     );
     final fontSize = size * 0.24;
 
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.easeOutCubic,
       width: size,
       height: size,
       alignment: Alignment.center,
@@ -37,18 +39,35 @@ class EtaBadge extends StatelessWidget {
             : eta.backgroundColor,
         borderRadius: BorderRadius.circular(size * 0.31),
       ),
-      child: Text(
-        isLoading ? '載入中' : eta.text,
-        textAlign: TextAlign.center,
-        softWrap: true,
-        maxLines: 2,
-        style: TextStyle(
-          color: isLoading
-              ? theme.colorScheme.onSurfaceVariant
-              : eta.foregroundColor,
-          fontWeight: FontWeight.w700,
-          fontSize: fontSize,
-          height: 1.1,
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 420),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (child, animation) {
+          return FadeTransition(
+            opacity: animation,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.68, end: 1).animate(
+                CurvedAnimation(parent: animation, curve: Curves.easeOutBack),
+              ),
+              child: child,
+            ),
+          );
+        },
+        child: Text(
+          key: ValueKey('eta-badge-loading-$isLoading'),
+          isLoading ? '載入中' : eta.text,
+          textAlign: TextAlign.center,
+          softWrap: true,
+          maxLines: 2,
+          style: TextStyle(
+            color: isLoading
+                ? theme.colorScheme.onSurfaceVariant
+                : eta.foregroundColor,
+            fontWeight: FontWeight.w700,
+            fontSize: fontSize,
+            height: 1.1,
+          ),
         ),
       ),
     );

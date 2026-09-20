@@ -106,6 +106,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   Timer? _countdownTimer;
   late final AnimationController _countdownProgressController;
   late final AnimationController _loadingPulseController;
+  late final AnimationController _initialStopsRevealController;
+  late final Animation<double> _initialStopsOpacity;
+  bool _initialStopsRevealScheduled = false;
   TabController? _tabController;
   StreamSubscription<Position>? _positionSubscription;
   Future<void>? _locationTrackingInFlight;
@@ -188,10 +191,18 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     _countdownProgressController = AnimationController(vsync: this);
     _loadingPulseController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 850),
+      duration: const Duration(milliseconds: 500),
       lowerBound: 0.45,
       upperBound: 0.9,
     )..repeat(reverse: true);
+    _initialStopsRevealController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
+    _initialStopsOpacity = CurvedAnimation(
+      parent: _initialStopsRevealController,
+      curve: Curves.easeOutCubic,
+    );
     _requestedPathId = widget.initialPathId;
     _requestedStopId = widget.initialStopId;
     _requestedDestinationPathId = widget.initialDestinationPathId;
@@ -270,6 +281,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     _routeVisitTimer?.cancel();
     _countdownProgressController.dispose();
     _loadingPulseController.dispose();
+    _initialStopsRevealController.dispose();
     _selectedMapPathId.dispose();
     _liveMapStopsByPath.dispose();
     _liveMapFamilyRouteIds.dispose();
@@ -395,6 +407,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
             _statusMessage = '正在載入即時到站資訊';
           });
           _loadingPulseController.stop();
+          _scheduleInitialStopsReveal();
           _updateDesktopPresence();
           if (_isRouteVisible) {
             unawaited(_loadSupplementaryNotices(topology));
@@ -432,6 +445,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
         _statusMessage = fetchedDetail.hasLiveData ? null : '即時資訊暫時無法取得';
       });
       _loadingPulseController.stop();
+      _scheduleInitialStopsReveal();
       _updateDesktopPresence();
       if (!_didRecordRouteVisit) {
         _didRecordRouteVisit = true;
@@ -531,6 +545,22 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
       return;
     }
     await _loadRouteFamily(selected, requestId: requestId);
+  }
+
+  void _scheduleInitialStopsReveal() {
+    if (_initialStopsRevealScheduled) {
+      return;
+    }
+    _initialStopsRevealScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(
+        Future<void>.delayed(const Duration(milliseconds: 500)).then((_) {
+          if (mounted) {
+            unawaited(_initialStopsRevealController.forward());
+          }
+        }),
+      );
+    });
   }
 
   void _syncLiveMapData(
@@ -5783,66 +5813,70 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
             tabs: detail.paths.map((path) => Tab(text: path.name)).toList(),
           ),
         Expanded(
-          child: _tabController == null
-              ? const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(24),
-                    child: CatStateCard(
-                      mood: CatStateMood.sad,
-                      title: '這條路線還沒有方向資料',
-                      message: '貓貓翻不到去程或返程，稍後再試試看。',
+          child: FadeTransition(
+            key: const ValueKey('route-stops-fade'),
+            opacity: _initialStopsOpacity,
+            child: _tabController == null
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: CatStateCard(
+                        mood: CatStateMood.sad,
+                        title: '這條路線還沒有方向資料',
+                        message: '貓貓翻不到去程或返程，稍後再試試看。',
+                      ),
                     ),
-                  ),
-                )
-              : TabBarView(
-                  controller: _tabController,
-                  children: detail.paths.map((path) {
-                    final pathStops =
-                        detail.stopsByPath[path.pathId] ?? const <StopInfo>[];
-                    if (pathStops.isEmpty) {
-                      return const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(24),
-                          child: CatStateCard(
-                            mood: CatStateMood.sad,
-                            title: '這個方向沒有站牌',
-                            message: '可能是資料還沒同步完成，等一下再更新。',
+                  )
+                : TabBarView(
+                    controller: _tabController,
+                    children: detail.paths.map((path) {
+                      final pathStops =
+                          detail.stopsByPath[path.pathId] ?? const <StopInfo>[];
+                      if (pathStops.isEmpty) {
+                        return const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: CatStateCard(
+                              mood: CatStateMood.sad,
+                              title: '這個方向沒有站牌',
+                              message: '可能是資料還沒同步完成，等一下再更新。',
+                            ),
                           ),
-                        ),
+                        );
+                      }
+                      return ListView.separated(
+                        controller: _scrollControllerForPath(path.pathId),
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+                        itemCount: pathStops.length + 2,
+                        separatorBuilder: (_, _) => const SizedBox(height: 18),
+                        itemBuilder: (context, index) {
+                          if (index == 0 || index == pathStops.length + 1) {
+                            return const AdBannerWidget();
+                          }
+                          final stop = pathStops[index - 1];
+                          final stopKey = _keyForStop(path.pathId, stop.stopId);
+                          final key = _stopKeys.putIfAbsent(
+                            stopKey,
+                            GlobalKey.new,
+                          );
+                          return Container(
+                            key: key,
+                            child: _buildStopTile(
+                              context,
+                              theme,
+                              stop,
+                              alwaysShowSeconds:
+                                  controller.settings.alwaysShowSeconds,
+                              isHighlighted: _isInitialStop(stop),
+                              isNearest: _isNearestStop(stop),
+                              isDestination: _isDestinationStop(stop),
+                            ),
+                          );
+                        },
                       );
-                    }
-                    return ListView.separated(
-                      controller: _scrollControllerForPath(path.pathId),
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
-                      itemCount: pathStops.length + 2,
-                      separatorBuilder: (_, _) => const SizedBox(height: 18),
-                      itemBuilder: (context, index) {
-                        if (index == 0 || index == pathStops.length + 1) {
-                          return const AdBannerWidget();
-                        }
-                        final stop = pathStops[index - 1];
-                        final stopKey = _keyForStop(path.pathId, stop.stopId);
-                        final key = _stopKeys.putIfAbsent(
-                          stopKey,
-                          GlobalKey.new,
-                        );
-                        return Container(
-                          key: key,
-                          child: _buildStopTile(
-                            context,
-                            theme,
-                            stop,
-                            alwaysShowSeconds:
-                                controller.settings.alwaysShowSeconds,
-                            isHighlighted: _isInitialStop(stop),
-                            isNearest: _isNearestStop(stop),
-                            isDestination: _isDestinationStop(stop),
-                          ),
-                        );
-                      },
-                    );
-                  }).toList(),
-                ),
+                    }).toList(),
+                  ),
+          ),
         ),
       ],
     );
@@ -5894,23 +5928,6 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
-                child: Row(
-                  children: [
-                    Icon(Icons.route_rounded, color: theme.colorScheme.primary),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        '正在準備 ${widget.routeNameHint ?? '路線'} 的站牌資訊',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
               if (hasInitialNotices)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
@@ -5974,71 +5991,6 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
                 ),
               ),
               const SizedBox(height: 8),
-              Expanded(
-                child: FadeTransition(
-                  opacity: _loadingPulseController,
-                  child: ListView.separated(
-                    physics: const NeverScrollableScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
-                    itemCount: 7,
-                    separatorBuilder: (_, _) => const SizedBox(height: 14),
-                    itemBuilder: (context, index) {
-                      final widthFactor = switch (index % 3) {
-                        0 => 0.58,
-                        1 => 0.72,
-                        _ => 0.46,
-                      };
-                      return Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 10,
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 58,
-                              height: 58,
-                              decoration: BoxDecoration(
-                                color: placeholderColor,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  FractionallySizedBox(
-                                    widthFactor: widthFactor,
-                                    child: Container(
-                                      height: 18,
-                                      decoration: BoxDecoration(
-                                        color: placeholderColor,
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  FractionallySizedBox(
-                                    widthFactor: widthFactor * 0.65,
-                                    child: Container(
-                                      height: 10,
-                                      decoration: BoxDecoration(
-                                        color: placeholderColor,
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
             ],
           ),
         ),
