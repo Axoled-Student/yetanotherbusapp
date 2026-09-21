@@ -45,6 +45,10 @@ android {
         jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     defaultConfig {
         applicationId = "tw.avianjay.taiwanbus.flutter"
         // You can update the following values to match your application needs.
@@ -94,6 +98,8 @@ dependencies {
     implementation("com.google.android.gms:play-services-wearable:20.0.1")
     implementation("androidx.work:work-runtime-ktx:2.10.3")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.16")
 }
 
 flutter {
