@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../app/bus_app.dart';
 import '../widgets/app_content_transition.dart';
 import '../core/friendly_error.dart';
+import '../core/metro_direction.dart';
 import '../core/request_sequence.dart';
 import '../core/transit_repository.dart';
 import '../widgets/background_image_wrapper.dart';
@@ -296,25 +297,20 @@ class _MetroScreenState extends State<MetroScreen> {
     if (selectedLine == null) {
       return const [];
     }
-    final filtered = _stationOfLine
-        .where((entry) => entry.lineId == selectedLine.lineId)
-        .toList(growable: false);
-    filtered.sort((left, right) => left.direction.compareTo(right.direction));
-    return filtered;
+    return buildMetroDirections(
+      lineId: selectedLine.lineId,
+      stationOfLine: _stationOfLine,
+    );
   }
 
   Map<String, MetroStation> get _stationLookup {
-    final selectedLine = _selectedLine;
-    if (selectedLine == null) {
+    if (_selectedLine == null) {
       return const {};
     }
-    final lookup = <String, MetroStation>{};
-    for (final station in _stations) {
-      if (station.lineId == selectedLine.lineId) {
-        lookup.putIfAbsent(station.stationId, () => station);
-      }
-    }
-    return lookup;
+    return buildMetroStationLookup(
+      stations: _stations,
+      lineStations: _uniqueStations,
+    );
   }
 
   List<MetroStationSequence> get _uniqueStations {
@@ -350,9 +346,26 @@ class _MetroScreenState extends State<MetroScreen> {
         if (startParts.length < 2 || endParts.length < 2) {
           continue;
         }
-        final startMinutes =
-            int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
-        final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+        final startHour = int.tryParse(startParts[0]);
+        final startMinute = int.tryParse(startParts[1]);
+        final endHour = int.tryParse(endParts[0]);
+        final endMinute = int.tryParse(endParts[1]);
+        if (startHour == null ||
+            startMinute == null ||
+            endHour == null ||
+            endMinute == null ||
+            startHour < 0 ||
+            startHour > 23 ||
+            endHour < 0 ||
+            endHour > 23 ||
+            startMinute < 0 ||
+            startMinute > 59 ||
+            endMinute < 0 ||
+            endMinute > 59) {
+          continue;
+        }
+        final startMinutes = startHour * 60 + startMinute;
+        final endMinutes = endHour * 60 + endMinute;
         if (nowMinutes >= startMinutes && nowMinutes <= endMinutes) {
           return headway;
         }
