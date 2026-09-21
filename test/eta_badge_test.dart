@@ -77,4 +77,31 @@ void main() {
     expect(find.text('2分'), findsNothing);
     expect(find.text('1分'), findsOneWidget);
   });
+
+  testWidgets('dark generic ETA uses a deep background and white text', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Center(
+          child: GenericEtaBadge(seconds: 300, darkBackground: true),
+        ),
+      ),
+    );
+
+    final container = tester.widget<AnimatedContainer>(
+      find.descendant(
+        of: find.byType(GenericEtaBadge),
+        matching: find.byType(AnimatedContainer),
+      ),
+    );
+    final decoration = container.decoration! as BoxDecoration;
+    final text = tester.widget<Text>(find.text('5分'));
+
+    expect(
+      HSLColor.fromColor(decoration.color!).lightness,
+      lessThanOrEqualTo(0.33),
+    );
+    expect(text.style?.color, Colors.white);
+  });
 }

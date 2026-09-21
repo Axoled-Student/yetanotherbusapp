@@ -71,12 +71,14 @@ class GenericEtaBadge extends StatelessWidget {
     required this.seconds,
     this.message,
     this.size = 58,
+    this.darkBackground = false,
     super.key,
   });
 
   final int? seconds;
   final String? message;
   final double size;
+  final bool darkBackground;
 
   @override
   Widget build(BuildContext context) {
@@ -88,6 +90,9 @@ class GenericEtaBadge extends StatelessWidget {
       colorScheme: theme.colorScheme,
     );
     final fontSize = size * 0.24;
+    final backgroundColor = darkBackground
+        ? _darkenEtaColor(eta.backgroundColor)
+        : eta.backgroundColor;
 
     return AnimatedContainer(
       duration: AppMotion.duration(context),
@@ -96,7 +101,7 @@ class GenericEtaBadge extends StatelessWidget {
       height: size,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: eta.backgroundColor,
+        color: backgroundColor,
         borderRadius: BorderRadius.circular(size * 0.31),
       ),
       child: AnimatedSwitcher(
@@ -110,7 +115,7 @@ class GenericEtaBadge extends StatelessWidget {
           softWrap: true,
           maxLines: 2,
           style: TextStyle(
-            color: eta.foregroundColor,
+            color: darkBackground ? Colors.white : eta.foregroundColor,
             fontWeight: FontWeight.w700,
             fontSize: fontSize,
             height: 1.1,
@@ -119,6 +124,15 @@ class GenericEtaBadge extends StatelessWidget {
       ),
     );
   }
+}
+
+Color _darkenEtaColor(Color color) {
+  final hsl = HSLColor.fromColor(color);
+  const maximumLightness = 0.32;
+  if (hsl.lightness <= maximumLightness) {
+    return color;
+  }
+  return hsl.withLightness(maximumLightness).toColor();
 }
 
 /// Build ETA presentation from raw seconds.
