@@ -804,7 +804,7 @@ class BusRepository {
       );
     }
 
-    final decoded = jsonDecode(apiResponseText(response)) as List<dynamic>;
+    final decoded = await apiDecodeJsonResponseAsync(response) as List<dynamic>;
     final summaries = decoded
         .whereType<Map>()
         .map((row) {
@@ -841,7 +841,7 @@ class BusRepository {
       throw HttpException('無法查詢全部路線 (${response.statusCode})。');
     }
 
-    final decoded = jsonDecode(apiResponseText(response)) as List<dynamic>;
+    final decoded = await apiDecodeJsonResponseAsync(response) as List<dynamic>;
     final summaries = decoded
         .whereType<Map>()
         .map((row) {
@@ -955,7 +955,7 @@ class BusRepository {
     if (response.statusCode != 200) {
       return null;
     }
-    final decoded = jsonDecode(apiResponseText(response)) as List<dynamic>;
+    final decoded = await apiDecodeJsonResponseAsync(response) as List<dynamic>;
     final rows = decoded
         .whereType<Map>()
         .map((row) {
@@ -1038,7 +1038,7 @@ class BusRepository {
     if (response.statusCode != 200) {
       return const [];
     }
-    final decoded = jsonDecode(apiResponseText(response)) as List<dynamic>;
+    final decoded = await apiDecodeJsonResponseAsync(response) as List<dynamic>;
     return decoded
         .whereType<Map>()
         .where((row) => (row['routeid']?.toString() ?? '') == routeId)
@@ -1574,7 +1574,7 @@ class BusRepository {
       throw HttpException('無法取得 $routeId 的路線站牌 (${response.statusCode})。');
     }
 
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     if (decoded is! Map<String, dynamic>) {
       throw const FormatException('Route stop payload is invalid.');
     }
@@ -1877,7 +1877,7 @@ class BusRepository {
     if (response.statusCode != 200) {
       return const [];
     }
-    final decoded = jsonDecode(apiResponseText(response)) as List<dynamic>;
+    final decoded = await apiDecodeJsonResponseAsync(response) as List<dynamic>;
     final results = <NearbyStopResult>[];
     for (final item in decoded.whereType<Map>()) {
       final routeId = item['routeid']?.toString() ?? '';
@@ -2428,7 +2428,7 @@ class BusRepository {
     }
 
     final decoded =
-        jsonDecode(apiResponseText(response)) as Map<String, dynamic>;
+        await apiDecodeJsonResponseAsync(response) as Map<String, dynamic>;
     final version = decoded['version'];
     if (version is num) {
       return version.toInt();
@@ -2549,7 +2549,7 @@ class BusRepository {
     }
 
     final decoded =
-        jsonDecode(apiResponseText(response)) as Map<String, dynamic>;
+        await apiDecodeJsonResponseAsync(response) as Map<String, dynamic>;
     final result = <String, LiveStopPayload>{};
 
     for (final rawPath in decoded['paths'] as List<dynamic>? ?? const []) {
@@ -2644,7 +2644,7 @@ class BusRepository {
     if (response.statusCode != 200) {
       throw HttpException('整站路線暫時無法取得 (${response.statusCode})。');
     }
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     if (decoded is! Map) {
       throw const FormatException('Invalid station passby response.');
     }
@@ -2773,7 +2773,7 @@ class BusRepository {
     }
 
     final decoded =
-        jsonDecode(apiResponseText(response)) as Map<String, dynamic>;
+        await apiDecodeJsonResponseAsync(response) as Map<String, dynamic>;
 
     final normalizedExpectedName = _normalizeStopNameForComparison(
       expectedStopName,
@@ -2971,7 +2971,7 @@ class BusRepository {
     }
 
     final decoded =
-        jsonDecode(apiResponseText(response)) as Map<String, dynamic>;
+        await apiDecodeJsonResponseAsync(response) as Map<String, dynamic>;
     final routesRaw =
         decoded['routes'] as Map<String, dynamic>? ?? const <String, dynamic>{};
 
@@ -3046,7 +3046,7 @@ class BusRepository {
       );
     }
 
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     if (decoded is! Map) {
       throw const FormatException('Route path geometry is invalid.');
     }
@@ -3088,7 +3088,7 @@ class BusRepository {
       throw HttpException('無法取得公車地圖即時資料：$routeId (${response.statusCode})');
     }
 
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     final rawBuses = switch (decoded) {
       List<dynamic> list => list,
       Map<dynamic, dynamic> map when map['buses'] is List<dynamic> =>
@@ -3157,7 +3157,7 @@ class BusRepository {
       );
     }
 
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     if (decoded is! Map) {
       throw const FormatException('City bus snapshot is invalid.');
     }
@@ -3277,7 +3277,7 @@ class BusRepository {
     }
 
     final decoded =
-        jsonDecode(apiResponseText(response)) as Map<String, dynamic>;
+        await apiDecodeJsonResponseAsync(response) as Map<String, dynamic>;
     final rawAlerts = decoded['alerts'] as List<dynamic>? ?? const [];
     return rawAlerts
         .whereType<Map<String, dynamic>>()
@@ -4638,7 +4638,7 @@ class BusRepository {
       throw Exception('Failed to fetch operators: ${response.statusCode}');
     }
     final List<dynamic> jsonList =
-        jsonDecode(apiResponseText(response)) as List<dynamic>;
+        await apiDecodeJsonResponseAsync(response) as List<dynamic>;
     final operators = jsonList
         .map((e) => RouteOperator.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -4666,7 +4666,7 @@ class BusRepository {
       throw Exception('Failed to fetch schedule: ${response.statusCode}');
     }
     final List<dynamic> jsonList =
-        jsonDecode(apiResponseText(response)) as List<dynamic>;
+        await apiDecodeJsonResponseAsync(response) as List<dynamic>;
     final entries = jsonList
         .map((e) => RouteScheduleEntry.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -4705,7 +4705,7 @@ class BusRepository {
         return fetchRouteSchedule(routeId);
       }
       final decoded =
-          jsonDecode(apiResponseText(response)) as Map<String, dynamic>;
+          await apiDecodeJsonResponseAsync(response) as Map<String, dynamic>;
       final List<dynamic> jsonList =
           decoded['entries'] as List<dynamic>? ?? const [];
       final entries = jsonList
@@ -4820,7 +4820,7 @@ class BusRepository {
     if (response.statusCode != 200) {
       throw HttpException('取消發車資料暫時無法取得 (${response.statusCode})。');
     }
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     if (decoded is! Map) {
       throw const FormatException('Taichung route index is invalid.');
     }
@@ -4927,7 +4927,7 @@ class BusRepository {
     if (response.statusCode != 200) {
       throw HttpException('取消發車資料暫時無法取得 (${response.statusCode})。');
     }
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     if (decoded is! List) {
       throw const FormatException('Taichung current schedule is invalid.');
     }
@@ -4944,7 +4944,7 @@ class BusRepository {
     if (response.statusCode != 200) {
       throw HttpException('取消發車資料暫時無法取得 (${response.statusCode})。');
     }
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     if (decoded is! Map || decoded['data'] is! Map) {
       throw const FormatException('Taichung GraphQL response is invalid.');
     }
@@ -5027,7 +5027,7 @@ class BusRepository {
         return const <String, bool>{};
       }
       final decoded =
-          jsonDecode(apiResponseText(response)) as Map<String, dynamic>;
+          await apiDecodeJsonResponseAsync(response) as Map<String, dynamic>;
       final list = decoded['holidays'] as List<dynamic>? ?? const [];
       final result = <String, bool>{};
       for (final item in list) {
