@@ -318,11 +318,11 @@ class HomeScreen extends StatelessWidget {
       backgroundColor: hasBusBackgroundImage ? Colors.transparent : null,
       appBar: AppBar(
         title: Transform.translate(
-          offset: Offset(0, isDesktop ? 4 : 0),
+          offset: Offset(0, isDesktop ? -2 : 0),
           child: SvgPicture.asset(
             'assets/branding/YABus-black.svg',
-            width: isDesktop ? 164 : 96,
-            height: isDesktop ? 36 : 21,
+            width: isDesktop ? 144 : 96,
+            height: isDesktop ? 32 : 21,
             semanticsLabel: 'YABus',
             colorFilter: ColorFilter.mode(
               colorScheme.onSurface,
