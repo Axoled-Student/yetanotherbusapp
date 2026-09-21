@@ -312,7 +312,16 @@ void main() {
 
   test('account sync local state preserves namespace metadata', () {
     final state = AccountSyncLocalState.empty()
-        .copyWith(syncEnabled: true)
+        .copyWith(
+          syncEnabled: true,
+          routeHistorySyncEnabled: true,
+          routeHistoryModifiedAtMs: 1716000000100,
+          routeHistoryDevicePayload: const {
+            'modifiedAtMs': 1716000000100,
+            'history': <dynamic>[],
+            'routeUsageProfiles': <dynamic>[],
+          },
+        )
         .copyWithNamespace(
           AccountSyncNamespace.preferences,
           const AccountSyncNamespaceLocalState(
@@ -330,10 +339,20 @@ void main() {
     final restored = AccountSyncLocalState.fromJson(state.toJson());
 
     expect(restored.syncEnabled, isTrue);
+    expect(restored.routeHistorySyncEnabled, isTrue);
+    expect(restored.routeHistoryModifiedAtMs, 1716000000100);
+    expect(restored.routeHistoryDevicePayload?['history'], isEmpty);
     expect(restored.preferences.lastSyncedServerRevision, 4);
     expect(
       restored.preferences.preservedPayload?['appearance']['themeMode'],
       'dark',
+    );
+    expect(AccountSyncLocalState.empty().routeHistorySyncEnabled, isFalse);
+    expect(
+      AccountSyncLocalState.fromJson(const {
+        'route_history_deletion_pending': true,
+      }).routeHistoryDeletionPending,
+      isTrue,
     );
   });
 

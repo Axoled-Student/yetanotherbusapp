@@ -341,27 +341,34 @@ class SmartRouteService {
     int limit = 3,
   }) async {
     final topProfiles = chooseTopProfilesForTime(profiles, now, limit: limit);
-    return Future.wait(
+    final suggestions = await Future.wait(
       topProfiles.map((profile) async {
-        final detail = await repository.getCompleteBusInfo(
-          profile.routeKey,
-          provider: profile.provider,
-        );
-        final favorite = chooseFavoriteForRoute(
-          routeProfile: profile,
-          favoriteProfiles: favoriteProfiles,
-          favorites: favorites,
-          now: now,
-        );
-        return buildSuggestion(
-          profile: profile,
-          score: scoreProfileForTime(profile, now),
-          reason: buildReason(profile, now),
-          detail: detail,
-          favorite: favorite,
-          position: position,
-        );
+        try {
+          final detail = await repository.getCompleteBusInfo(
+            profile.routeKey,
+            provider: profile.provider,
+          );
+          final favorite = chooseFavoriteForRoute(
+            routeProfile: profile,
+            favoriteProfiles: favoriteProfiles,
+            favorites: favorites,
+            now: now,
+          );
+          return buildSuggestion(
+            profile: profile,
+            score: scoreProfileForTime(profile, now),
+            reason: buildReason(profile, now),
+            detail: detail,
+            favorite: favorite,
+            position: position,
+          );
+        } catch (_) {
+          return null;
+        }
       }),
+    );
+    return suggestions.whereType<SmartRouteSuggestion>().toList(
+      growable: false,
     );
   }
 

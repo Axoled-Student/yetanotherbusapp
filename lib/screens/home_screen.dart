@@ -6,6 +6,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../app/bus_app.dart';
+import '../core/app_motion.dart';
 import '../core/app_routes.dart';
 import '../core/app_controller.dart';
 import '../core/friendly_error.dart';
@@ -572,6 +573,7 @@ class _SmartRecommendationCardState extends State<_SmartRecommendationCard> {
     final nextKey = [
       widget.controller.settings.provider.name,
       widget.controller.settings.enableSmartRecommendations,
+      widget.controller.databaseReady,
       widget.controller.smartRouteSignature,
     ].join('|');
     if (_reloadKey == nextKey) {
@@ -597,6 +599,11 @@ class _SmartRecommendationCardState extends State<_SmartRecommendationCard> {
       Position? lastKnown;
       try {
         lastKnown = await Geolocator.getLastKnownPosition();
+        if (lastKnown != null &&
+            DateTime.now().difference(lastKnown.timestamp).abs() >
+                const Duration(minutes: 10)) {
+          lastKnown = null;
+        }
       } catch (_) {
         lastKnown = null;
       }
@@ -606,10 +613,11 @@ class _SmartRecommendationCardState extends State<_SmartRecommendationCard> {
         return lastKnown;
       }
 
+      if (lastKnown != null) {
+        return lastKnown;
+      }
+
       try {
-        if (lastKnown != null) {
-          return lastKnown;
-        }
         return await Geolocator.getCurrentPosition(
           locationSettings: const LocationSettings(
             accuracy: LocationAccuracy.medium,
@@ -643,10 +651,7 @@ class _SmartRecommendationCardState extends State<_SmartRecommendationCard> {
           (suggestion) => suggestion.favoriteStop != null,
         );
         if (!allHaveFavoriteStops) {
-          position = await positionFuture.timeout(
-            const Duration(milliseconds: 800),
-            onTimeout: () => null,
-          );
+          position = await positionFuture;
         }
         final suggestions = position == null
             ? baseSuggestions
@@ -686,30 +691,40 @@ class _SmartRecommendationCardState extends State<_SmartRecommendationCard> {
         return null;
       }
 
-      final nearbyList = await Future.wait(
+      final nearbyResults = await Future.wait(
         nearbyStops.take(widget.maxSuggestions).map((nearest) async {
-          final routeProvider = busProviderFromString(
-            nearest.route.sourceProvider,
-          );
-          final detail = await controller.getPrimaryRouteDetail(
-            nearest.route.routeKey,
-            provider: routeProvider,
-            routeIdHint: nearest.route.routeId,
-            routeNameHint: nearest.route.routeName,
-          );
-          final liveStop = _findStopInDetail(
-            detail,
-            pathId: nearest.stop.pathId,
-            stopId: nearest.stop.stopId,
-          );
-          return _NearbyFallbackData(
-            result: nearest,
-            detail: detail,
-            liveStop: liveStop,
-            path: _findPath(detail, nearest.stop.pathId),
-          );
+          try {
+            final routeProvider = busProviderFromString(
+              nearest.route.sourceProvider,
+            );
+            final detail = await controller.getPrimaryRouteDetail(
+              nearest.route.routeKey,
+              provider: routeProvider,
+              routeIdHint: nearest.route.routeId,
+              routeNameHint: nearest.route.routeName,
+            );
+            final liveStop = _findStopInDetail(
+              detail,
+              pathId: nearest.stop.pathId,
+              stopId: nearest.stop.stopId,
+            );
+            return _NearbyFallbackData(
+              result: nearest,
+              detail: detail,
+              liveStop: liveStop,
+              path: _findPath(detail, nearest.stop.pathId),
+            );
+          } catch (_) {
+            return null;
+          }
         }),
       );
+      final nearbyList = nearbyResults.whereType<_NearbyFallbackData>().toList(
+        growable: false,
+      );
+      if (nearbyList.isEmpty) {
+        return null;
+      }
       return _SmartCardData.nearby(nearbyList);
     } catch (_) {
       return null;
@@ -877,44 +892,6 @@ class _SmartRecommendationCardState extends State<_SmartRecommendationCard> {
     return _SmartRecommendationShell(
       title: '智慧推薦',
       child: Text('請先下載本地資料庫。下載完成後，這張卡片才會開始學習你的使用習慣並顯示附近站牌到站時間。'),
-    );
-  }
-
-  // ignore: unused_element
-  Widget _buildEmptyState(BuildContext context) {
-    return _SmartRecommendationShell(
-      title: '智慧推薦',
-      trailing: IconButton(
-        tooltip: '重新整理',
-        onPressed: _refresh,
-        icon: const Icon(Icons.refresh_rounded),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '再多打開幾次常用路線，尤其是在你平常會查車的時段。至少累積幾次實際開啓後，這裡才會開始穩定推薦；如果有定位資料，也會優先嘗試帶你看最近站點。',
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              Chip(
-                avatar: const Icon(Icons.schedule_rounded),
-                label: Text(
-                  '已學習 ${widget.controller.routeUsageProfiles.length} 條路線',
-                ),
-              ),
-              Chip(
-                avatar: const Icon(Icons.storage_rounded),
-                label: Text(widget.controller.settings.provider.label),
-              ),
-            ],
-          ),
-        ],
-      ),
     );
   }
 
@@ -1202,20 +1179,17 @@ class _SmartRecommendationCardState extends State<_SmartRecommendationCard> {
             ),
           );
         } else if (snapshot.hasError) {
-          // return _SmartRecommendationShell(
-          //   title: '智慧推薦',
-          //   subtitle: '這個時段原本有學到偏好，但這次整理失敗了。',
-          //   trailing: IconButton(
-          //     tooltip: '重試',
-          //     onPressed: _refresh,
-          //     icon: const Icon(Icons.refresh_rounded),
-          //   ),
-          //   child: Text('推薦整理失敗：${snapshot.error}'),
-          // );
           stateKey = 'error';
-          state = const SizedBox.shrink();
+          state = _SmartRecommendationShell(
+            title: '智慧推薦',
+            trailing: IconButton(
+              tooltip: '重試',
+              onPressed: _refresh,
+              icon: const Icon(Icons.refresh_rounded),
+            ),
+            child: const Text('請稍後重試。'),
+          );
         } else if (snapshot.data == null) {
-          // return _buildEmptyState(context);
           stateKey = 'empty';
           state = const SizedBox.shrink();
         } else if (snapshot.data!.suggestions.isNotEmpty) {
@@ -1231,15 +1205,14 @@ class _SmartRecommendationCardState extends State<_SmartRecommendationCard> {
             snapshot.data!.nearbyList,
           );
         } else {
-          // return _buildEmptyState(context);
           stateKey = 'empty';
           state = const SizedBox.shrink();
         }
 
         return AnimatedSwitcher(
-          duration: const Duration(milliseconds: 320),
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
+          duration: AppMotion.duration(context),
+          switchInCurve: AppMotion.curve,
+          switchOutCurve: AppMotion.curve,
           transitionBuilder: (child, animation) {
             return FadeTransition(opacity: animation, child: child);
           },

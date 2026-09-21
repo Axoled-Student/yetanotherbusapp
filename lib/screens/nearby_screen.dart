@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../app/bus_app.dart';
+import '../widgets/app_content_transition.dart';
 import '../core/bus_repository.dart';
 import '../core/friendly_error.dart';
 import '../core/models.dart';
@@ -433,111 +434,121 @@ class _NearbyScreenState extends State<NearbyScreen> {
             ),
           ],
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : _error != null
-            ? Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(_error!, textAlign: TextAlign.center),
-                      const SizedBox(height: 16),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        alignment: WrapAlignment.center,
-                        children: [
-                          FilledButton(
-                            onPressed: _loadNearbyStops,
-                            child: const Text('重試'),
-                          ),
-                          OutlinedButton(
-                            onPressed: () {
-                              openAdaptiveSettingsScreen(context);
-                            },
-                            child: const Text('前往設定'),
-                          ),
-                        ],
-                      ),
-                    ],
+        body: AppContentTransition(
+          state: _loading
+              ? 'loading'
+              : _error != null
+              ? 'error'
+              : groups.isEmpty
+              ? 'empty'
+              : 'content',
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _error != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(_error!, textAlign: TextAlign.center),
+                        const SizedBox(height: 16),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          alignment: WrapAlignment.center,
+                          children: [
+                            FilledButton(
+                              onPressed: _loadNearbyStops,
+                              child: const Text('重試'),
+                            ),
+                            OutlinedButton(
+                              onPressed: () {
+                                openAdaptiveSettingsScreen(context);
+                              },
+                              child: const Text('前往設定'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              )
-            : groups.isEmpty
-            ? const Center(child: Text('附近沒有找到站牌。'))
-            : Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 760),
-                  child: ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                    itemCount: groups.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final group = groups[index];
-                      return Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Container(
-                                    width: 52,
-                                    height: 52,
-                                    alignment: Alignment.center,
-                                    decoration: BoxDecoration(
-                                      color: theme.colorScheme.primaryContainer,
-                                      borderRadius: BorderRadius.circular(16),
+                )
+              : groups.isEmpty
+              ? const Center(child: Text('附近沒有找到站牌。'))
+              : Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 760),
+                    child: ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                      itemCount: groups.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final group = groups[index];
+                        return Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      width: 52,
+                                      height: 52,
+                                      alignment: Alignment.center,
+                                      decoration: BoxDecoration(
+                                        color:
+                                            theme.colorScheme.primaryContainer,
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                      child: Text(
+                                        formatDistance(group.distanceMeters),
+                                        textAlign: TextAlign.center,
+                                        style: theme.textTheme.labelMedium,
+                                      ),
                                     ),
-                                    child: Text(
-                                      formatDistance(group.distanceMeters),
-                                      textAlign: TextAlign.center,
-                                      style: theme.textTheme.labelMedium,
+                                    const SizedBox(width: 14),
+                                    Expanded(
+                                      child: Text(
+                                        group.stopName,
+                                        style: theme.textTheme.titleMedium
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 14),
-                                  Expanded(
-                                    child: Text(
-                                      group.stopName,
-                                      style: theme.textTheme.titleMedium
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
+                                  ],
+                                ),
+                                if (_loadingEtas) ...[
+                                  const SizedBox(height: 10),
+                                  const LinearProgressIndicator(minHeight: 2),
+                                ],
+                                const SizedBox(height: 8),
+                                for (
+                                  var index = 0;
+                                  index < group.routes.length;
+                                  index++
+                                ) ...[
+                                  if (index > 0) const Divider(height: 1),
+                                  _buildRouteRow(
+                                    theme,
+                                    group.routes[index],
+                                    alwaysShowSeconds:
+                                        controller.settings.alwaysShowSeconds,
                                   ),
                                 ],
-                              ),
-                              if (_loadingEtas) ...[
-                                const SizedBox(height: 10),
-                                const LinearProgressIndicator(minHeight: 2),
                               ],
-                              const SizedBox(height: 8),
-                              for (
-                                var index = 0;
-                                index < group.routes.length;
-                                index++
-                              ) ...[
-                                if (index > 0) const Divider(height: 1),
-                                _buildRouteRow(
-                                  theme,
-                                  group.routes[index],
-                                  alwaysShowSeconds:
-                                      controller.settings.alwaysShowSeconds,
-                                ),
-                              ],
-                            ],
+                            ),
                           ),
-                        ),
-                      );
-                    },
+                        );
+                      },
+                    ),
                   ),
                 ),
-              ),
+        ),
       ),
     );
   }

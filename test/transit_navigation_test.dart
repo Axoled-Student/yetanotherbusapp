@@ -104,9 +104,7 @@ void main() {
     expect(tester.getTopLeft(find.byType(NavigationBar)), navigationTop);
   });
 
-  testWidgets('mode pages enter from their position in the navigation bar', (
-    tester,
-  ) async {
+  testWidgets('mode pages fade in place without sliding', (tester) async {
     tester.view.physicalSize = const Size(390, 600);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -123,13 +121,25 @@ void main() {
     await tester.pump();
 
     await tester.tap(find.text('高鐵'));
+    await tester.pump();
     await tester.pump(const Duration(milliseconds: 30));
-    expect(_modeTranslation(tester, TransitMode.thsr).dx, greaterThan(0));
+    expect(_modeOpacity(tester, TransitMode.thsr), inExclusiveRange(0, 1));
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey(TransitMode.thsr))),
+      Offset.zero,
+    );
 
     await tester.pump(const Duration(milliseconds: 250));
     await tester.tap(find.text('捷運'));
+    await tester.pump();
     await tester.pump(const Duration(milliseconds: 30));
-    expect(_modeTranslation(tester, TransitMode.metro).dx, lessThan(0));
+    expect(_modeOpacity(tester, TransitMode.metro), inExclusiveRange(0, 1));
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey(TransitMode.metro))),
+      Offset.zero,
+    );
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(_modeOpacity(tester, TransitMode.metro), 1);
   });
 
   for (final layout in [
@@ -244,12 +254,12 @@ void main() {
   }
 }
 
-Offset _modeTranslation(WidgetTester tester, TransitMode mode) {
+double _modeOpacity(WidgetTester tester, TransitMode mode) {
   final layer = find.descendant(
     of: find.byKey(ValueKey<TransitMode>(mode)),
-    matching: find.byType(FractionalTranslation),
+    matching: find.byType(Opacity),
   );
-  return tester.widget<FractionalTranslation>(layer.first).translation;
+  return tester.widget<Opacity>(layer.first).opacity;
 }
 
 Future<AppController> _buildController() async {

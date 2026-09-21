@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import '../core/app_motion.dart';
 
 /// Bus and user-location markers shared by the route sheet and the city map.
 ///
@@ -26,30 +27,24 @@ class BusMapBusMarker extends StatelessWidget {
     final foreground = color.computeLuminance() > 0.45
         ? Colors.black87
         : Colors.white;
-    return AnimatedScale(
-      scale: selected ? 1.08 : 1,
-      duration: const Duration(milliseconds: 180),
-      child: Container(
-        decoration: BoxDecoration(
-          color: color,
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.white, width: selected ? 3 : 2),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x33000000),
-              blurRadius: 10,
-              offset: Offset(0, 3),
-            ),
-          ],
-        ),
-        child: Tooltip(
-          message: label,
-          child: Icon(
-            Icons.directions_bus_rounded,
-            color: foreground,
-            size: selected ? 24 : 20,
+    return AnimatedContainer(
+      duration: AppMotion.duration(context, AppMotion.quick),
+      curve: AppMotion.curve,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: selected ? 3 : 2),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 10,
+            offset: Offset(0, 3),
           ),
-        ),
+        ],
+      ),
+      child: Tooltip(
+        message: label,
+        child: Icon(Icons.directions_bus_rounded, color: foreground, size: 22),
       ),
     );
   }

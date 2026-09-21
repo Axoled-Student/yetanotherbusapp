@@ -4,7 +4,6 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import 'package:latlong2/latlong.dart';
 
@@ -17,6 +16,7 @@ import '../core/http_error_utils.dart';
 import '../core/models.dart';
 import '../core/relative_time_formatter.dart';
 import '../core/route_direction_label.dart';
+import '../core/user_location.dart';
 import '../widgets/ad_banner_widget.dart';
 import '../widgets/bus_map_geometry.dart';
 import '../widgets/bus_map_markers.dart';
@@ -232,19 +232,19 @@ class _BusMapScreenState extends State<BusMapScreen>
     if (!_isActive || !mounted) {
       return;
     }
-    if (_selectedGroupKey != null) {
-      _startSimulationTimer();
-    }
+    _startSimulationTimer();
     unawaited(_loadBuses());
   }
 
-  /// Interpolating positions only matters for the route being watched; running
-  /// it for a whole city would rebuild thousands of markers four times a second
-  /// to move dots nobody is looking at.
   void _startSimulationTimer() {
     _simulationTimer?.cancel();
+    if (!_isActive) {
+      return;
+    }
     _simulationTimer = Timer.periodic(_simulationTick, (_) {
-      if (!mounted || !_isActive || _selectedGroupKey == null || _isClustered) {
+      if (!mounted ||
+          !_isActive ||
+          (_isClustered && _selectedGroupKey == null)) {
         return;
       }
       _animationTick.value++;
@@ -327,9 +327,6 @@ class _BusMapScreenState extends State<BusMapScreen>
 
   Future<void> _initializeMap() async {
     await _loadBuses(fitCamera: true);
-    if (mounted) {
-      await _locateMe(showFeedback: false);
-    }
   }
 
   void _applySnapshot(CityBusSnapshot snapshot) {
@@ -382,6 +379,7 @@ class _BusMapScreenState extends State<BusMapScreen>
         _selectedBusKey = null;
       }
     });
+    _startSimulationTimer();
   }
 
   void _scheduleNextRefresh() {
@@ -426,8 +424,6 @@ class _BusMapScreenState extends State<BusMapScreen>
   }
 
   void _clearSelection() {
-    _simulationTimer?.cancel();
-    _simulationTimer = null;
     _contextRequestSerial += 1;
     setState(() {
       _selectedBusKey = null;
@@ -616,24 +612,7 @@ class _BusMapScreenState extends State<BusMapScreen>
 
   Future<void> _locateMe({bool showFeedback = true}) async {
     try {
-      if (!await Geolocator.isLocationServiceEnabled()) {
-        if (showFeedback) {
-          _showLocationHint('定位服務尚未開啟。');
-        }
-        return;
-      }
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        if (showFeedback) {
-          _showLocationHint('沒有取得定位權限。', offerSettings: true);
-        }
-        return;
-      }
-      final position = await Geolocator.getCurrentPosition();
+      final position = await resolveUserPosition();
       if (!mounted) {
         return;
       }
@@ -666,7 +645,10 @@ class _BusMapScreenState extends State<BusMapScreen>
       }
     } catch (error) {
       if (mounted && showFeedback) {
-        _showLocationHint(friendlyErrorMessage(error));
+        _showLocationHint(
+          friendlyErrorMessage(error),
+          offerSettings: error is LocationFailure && error.deniedForever,
+        );
       }
     }
   }
@@ -798,19 +780,15 @@ class _BusMapScreenState extends State<BusMapScreen>
 
   /// Where to draw a bus right now.
   ///
-  /// Only the watched route is interpolated. Everything else sits at its last
-  /// reported position until the next poll: dead-reckoning a few hundred buses
-  /// four times a second costs a frame each time and moves dots too small to
-  /// see, and it makes every marker look changed to the platform layer.
   LatLng _pointFor(CityBus bus, DateTime now) {
-    if (bus.groupKey != _selectedGroupKey) {
-      return LatLng(bus.bus.lat, bus.bus.lon);
-    }
     final state = _busStates[bus.stateKey];
     if (state == null) {
       return LatLng(bus.bus.lat, bus.bus.lon);
     }
-    return state.positionAt(now, geometry: _selectedGeometry);
+    return state.positionAt(
+      now,
+      geometry: bus.groupKey == _selectedGroupKey ? _selectedGeometry : null,
+    );
   }
 
   Color _colorFor(CityBus bus) =>
@@ -1300,26 +1278,30 @@ class _BusMapScreenState extends State<BusMapScreen>
     );
   }
 
-  /// Bus markers for `flutter_map`, reusing the widgets that have not moved.
-  ///
-  /// Only the watched route changes between polls, so handing Flutter the very
-  /// same `Marker` instances for everything else lets it skip those subtrees
-  /// entirely instead of laying out hundreds of identical dots every tick.
+  /// Reuse stationary markers while rebuilding only buses that can move.
   List<Marker> _osmBusMarkers(List<CityBus> buses, DateTime now) {
     final cacheKey = _staticMarkerCacheKey(buses);
-    final selectedGroupKey = _selectedGroupKey;
     if (cacheKey != _osmMarkerCacheKey) {
       _osmMarkerCacheKey = cacheKey;
       _cachedOsmMarkers = [
         for (final bus in buses)
-          if (bus.groupKey != selectedGroupKey) _osmBusMarker(bus, now),
+          if (!_isAnimatedBus(bus)) _osmBusMarker(bus, now),
       ];
     }
     return [
       ..._cachedOsmMarkers,
       for (final bus in buses)
-        if (bus.groupKey == selectedGroupKey) _osmBusMarker(bus, now),
+        if (_isAnimatedBus(bus)) _osmBusMarker(bus, now),
     ];
+  }
+
+  bool _isAnimatedBus(CityBus bus) {
+    final state = _busStates[bus.stateKey];
+    if (state == null || state.speedMps <= 0) {
+      return false;
+    }
+    return state.azimuth != null ||
+        (bus.groupKey == _selectedGroupKey && _selectedGeometry != null);
   }
 
   Marker _osmBusMarker(CityBus bus, DateTime now) {
@@ -1352,6 +1334,7 @@ class _BusMapScreenState extends State<BusMapScreen>
       _favoritesOnly,
       _nameFilter,
       _zoom.toStringAsFixed(1),
+      _selectedGeometry?.points.length ?? 0,
     ].join('|');
   }
 

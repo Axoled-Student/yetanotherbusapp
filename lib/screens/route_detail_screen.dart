@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../app/bus_app.dart';
+import '../core/app_motion.dart';
 import '../core/android_home_integration.dart';
 import '../core/android_trip_monitor.dart';
 import '../core/app_controller.dart';
@@ -33,6 +34,7 @@ import '../widgets/cat_state_card.dart';
 import '../widgets/eta_badge.dart';
 import '../widgets/route_bus_map_sheet.dart';
 import '../widgets/ad_banner_widget.dart';
+import '../widgets/app_content_transition.dart';
 import '../widgets/stop_transfer_sheet.dart';
 import 'favorite_groups_screen.dart';
 
@@ -105,7 +107,6 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   RouteDetailData? _detail;
   Timer? _countdownTimer;
   late final AnimationController _countdownProgressController;
-  late final AnimationController _loadingPulseController;
   late final AnimationController _initialStopsRevealController;
   late final Animation<double> _initialStopsOpacity;
   bool _initialStopsRevealScheduled = false;
@@ -189,19 +190,13 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     _liveMapFamilyRouteIds = ValueNotifier<List<String>>(const <String>[]);
     _remainingSeconds = ValueNotifier<int>(0);
     _countdownProgressController = AnimationController(vsync: this);
-    _loadingPulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 500),
-      lowerBound: 0.45,
-      upperBound: 0.9,
-    )..repeat(reverse: true);
     _initialStopsRevealController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 500),
+      duration: AppMotion.standard,
     );
     _initialStopsOpacity = CurvedAnimation(
       parent: _initialStopsRevealController,
-      curve: Curves.easeOutCubic,
+      curve: AppMotion.curve,
     );
     _requestedPathId = widget.initialPathId;
     _requestedStopId = widget.initialStopId;
@@ -212,6 +207,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _initialStopsRevealController.value = 1;
+    }
     final route = ModalRoute.of(context);
     if (_route != route) {
       if (_route != null) {
@@ -280,7 +278,6 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     _countdownTimer?.cancel();
     _routeVisitTimer?.cancel();
     _countdownProgressController.dispose();
-    _loadingPulseController.dispose();
     _initialStopsRevealController.dispose();
     _selectedMapPathId.dispose();
     _liveMapStopsByPath.dispose();
@@ -406,7 +403,6 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
             _isLoading = false;
             _statusMessage = '正在載入即時到站資訊';
           });
-          _loadingPulseController.stop();
           _scheduleInitialStopsReveal();
           _updateDesktopPresence();
           if (_isRouteVisible) {
@@ -444,7 +440,6 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
         _error = null;
         _statusMessage = fetchedDetail.hasLiveData ? null : '即時資訊暫時無法取得';
       });
-      _loadingPulseController.stop();
       _scheduleInitialStopsReveal();
       _updateDesktopPresence();
       if (!_didRecordRouteVisit) {
@@ -553,13 +548,12 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     }
     _initialStopsRevealScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(
-        Future<void>.delayed(const Duration(milliseconds: 500)).then((_) {
-          if (mounted) {
-            unawaited(_initialStopsRevealController.forward());
-          }
-        }),
-      );
+      if (!mounted) return;
+      if (MediaQuery.disableAnimationsOf(context)) {
+        _initialStopsRevealController.value = 1;
+      } else {
+        unawaited(_initialStopsRevealController.forward());
+      }
     });
   }
 
@@ -1343,31 +1337,17 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
     return ValueListenableBuilder<int>(
       valueListenable: _remainingSeconds,
       builder: (context, remainingSeconds, child) {
-        return AnimatedSwitcher(
-          duration: const Duration(milliseconds: 260),
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          transitionBuilder: (child, animation) {
-            return SizeTransition(
-              sizeFactor: animation,
-              axis: Axis.horizontal,
-              child: child,
-            );
-          },
-          child: remainingSeconds <= 0 || _isLoading || _isFamilyLoading
-              ? const LinearProgressIndicator(
-                  key: ValueKey('loading-progress'),
-                  minHeight: 4,
-                )
+        final loading = remainingSeconds <= 0 || _isLoading || _isFamilyLoading;
+        return AppContentTransition(
+          state: loading,
+          child: loading
+              ? const LinearProgressIndicator(minHeight: 4)
               : AnimatedBuilder(
-                  key: const ValueKey('countdown-progress'),
                   animation: _countdownProgressController,
-                  builder: (context, child) {
-                    return LinearProgressIndicator(
-                      value: _countdownProgressController.value,
-                      minHeight: 4,
-                    );
-                  },
+                  builder: (context, child) => LinearProgressIndicator(
+                    value: _countdownProgressController.value,
+                    minHeight: 4,
+                  ),
                 ),
         );
       },
@@ -5961,8 +5941,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen>
                     ],
                   ),
                 ),
-              FadeTransition(
-                opacity: _loadingPulseController,
+              Opacity(
+                opacity: 0.7,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Row(

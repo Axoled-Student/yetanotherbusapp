@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../app/bus_app.dart';
+import '../widgets/app_content_transition.dart';
 import '../core/friendly_error.dart';
 import '../core/request_sequence.dart';
 import '../core/transit_repository.dart';
@@ -463,55 +464,62 @@ class _MetroScreenState extends State<MetroScreen> {
             child: Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 960),
-                child: _loading && _systems.isEmpty
-                    ? const Center(child: CircularProgressIndicator())
-                    : _pageError != null && _systems.isEmpty
-                    ? _ErrorState(
-                        message: _pageError!,
-                        onRetry: () => _loadSystems(refresh: true),
-                      )
-                    : RefreshIndicator(
-                        onRefresh: _selectedSystem == null
-                            ? () => _loadSystems(refresh: true)
-                            : () => _loadSystemData(
-                                system: _selectedSystem!,
-                                refresh: true,
-                              ),
-                        child: ListView(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          padding: const EdgeInsets.all(16),
-                          children: [
-                            _buildSystemSelector(theme),
-                            const SizedBox(height: 16),
-                            _buildLineSelector(theme),
-                            const SizedBox(height: 16),
-                            if (_lineError != null) ...[
-                              Text(
-                                _lineError!,
-                                style: TextStyle(
-                                  color: theme.colorScheme.error,
+                child: AppContentTransition(
+                  state: (
+                    _systems.isEmpty,
+                    _systems.isEmpty && _loading,
+                    _systems.isEmpty && _pageError != null,
+                  ),
+                  child: _loading && _systems.isEmpty
+                      ? const Center(child: CircularProgressIndicator())
+                      : _pageError != null && _systems.isEmpty
+                      ? _ErrorState(
+                          message: _pageError!,
+                          onRetry: () => _loadSystems(refresh: true),
+                        )
+                      : RefreshIndicator(
+                          onRefresh: _selectedSystem == null
+                              ? () => _loadSystems(refresh: true)
+                              : () => _loadSystemData(
+                                  system: _selectedSystem!,
+                                  refresh: true,
                                 ),
+                          child: ListView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.all(16),
+                            children: [
+                              _buildSystemSelector(theme),
+                              const SizedBox(height: 16),
+                              _buildLineSelector(theme),
+                              const SizedBox(height: 16),
+                              if (_lineError != null) ...[
+                                Text(
+                                  _lineError!,
+                                  style: TextStyle(
+                                    color: theme.colorScheme.error,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                              ],
+                              _buildSourceBanner(theme),
+                              const SizedBox(height: 16),
+                              _MetroPanelButtons(
+                                current: _panel,
+                                onChanged: (panel) =>
+                                    setState(() => _panel = panel),
                               ),
                               const SizedBox(height: 16),
+                              AppContentTransition(
+                                state: _panel,
+                                child: switch (_panel) {
+                                  _MetroPanel.live => _buildLivePanel(theme),
+                                  _MetroPanel.map => _buildMapPanel(theme),
+                                },
+                              ),
                             ],
-                            _buildSourceBanner(theme),
-                            const SizedBox(height: 16),
-                            _MetroPanelButtons(
-                              current: _panel,
-                              onChanged: (panel) =>
-                                  setState(() => _panel = panel),
-                            ),
-                            const SizedBox(height: 16),
-                            AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 220),
-                              child: switch (_panel) {
-                                _MetroPanel.live => _buildLivePanel(theme),
-                                _MetroPanel.map => _buildMapPanel(theme),
-                              },
-                            ),
-                          ],
+                          ),
                         ),
-                      ),
+                ),
               ),
             ),
           ),

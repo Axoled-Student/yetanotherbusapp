@@ -10,6 +10,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import 'package:latlong2/latlong.dart';
 
 import '../app/bus_app.dart';
+import '../core/app_motion.dart';
 import '../core/friendly_error.dart';
 import '../core/models.dart';
 import 'bus_map_geometry.dart';
@@ -1975,28 +1976,26 @@ class _StopMarker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedScale(
-      scale: selected ? 1.08 : 1,
-      duration: const Duration(milliseconds: 180),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: Colors.white, width: selected ? 2.5 : 1.8),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x33000000),
-              blurRadius: 8,
-              offset: Offset(0, 2),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(999),
-          child: EtaBadge(
-            stop: stop,
-            alwaysShowSeconds: alwaysShowSeconds,
-            size: selected ? 36 : 30,
+    return AnimatedContainer(
+      duration: AppMotion.duration(context, AppMotion.quick),
+      curve: AppMotion.curve,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white, width: selected ? 2.5 : 1.8),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 8,
+            offset: Offset(0, 2),
           ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(999),
+        child: EtaBadge(
+          stop: stop,
+          alwaysShowSeconds: alwaysShowSeconds,
+          size: 32,
         ),
       ),
     );

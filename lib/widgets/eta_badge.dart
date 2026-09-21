@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/models.dart';
+import '../core/app_motion.dart';
 
 class EtaBadge extends StatelessWidget {
   const EtaBadge({
@@ -28,8 +29,8 @@ class EtaBadge extends StatelessWidget {
     final fontSize = size * 0.24;
 
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 420),
-      curve: Curves.easeOutCubic,
+      duration: AppMotion.duration(context),
+      curve: AppMotion.curve,
       width: size,
       height: size,
       alignment: Alignment.center,
@@ -40,22 +41,11 @@ class EtaBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(size * 0.31),
       ),
       child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 420),
-        switchInCurve: Curves.easeOutCubic,
-        switchOutCurve: Curves.easeInCubic,
-        transitionBuilder: (child, animation) {
-          return FadeTransition(
-            opacity: animation,
-            child: ScaleTransition(
-              scale: Tween<double>(begin: 0.68, end: 1).animate(
-                CurvedAnimation(parent: animation, curve: Curves.easeOutBack),
-              ),
-              child: child,
-            ),
-          );
-        },
+        duration: AppMotion.duration(context),
+        switchInCurve: AppMotion.curve,
+        switchOutCurve: AppMotion.curve,
         child: Text(
-          key: ValueKey('eta-badge-loading-$isLoading'),
+          key: ValueKey((isLoading, isLoading ? '載入中' : eta.text)),
           isLoading ? '載入中' : eta.text,
           textAlign: TextAlign.center,
           softWrap: true,
@@ -99,7 +89,9 @@ class GenericEtaBadge extends StatelessWidget {
     );
     final fontSize = size * 0.24;
 
-    return Container(
+    return AnimatedContainer(
+      duration: AppMotion.duration(context),
+      curve: AppMotion.curve,
       width: size,
       height: size,
       alignment: Alignment.center,
@@ -107,16 +99,22 @@ class GenericEtaBadge extends StatelessWidget {
         color: eta.backgroundColor,
         borderRadius: BorderRadius.circular(size * 0.31),
       ),
-      child: Text(
-        eta.text,
-        textAlign: TextAlign.center,
-        softWrap: true,
-        maxLines: 2,
-        style: TextStyle(
-          color: eta.foregroundColor,
-          fontWeight: FontWeight.w700,
-          fontSize: fontSize,
-          height: 1.1,
+      child: AnimatedSwitcher(
+        duration: AppMotion.duration(context),
+        switchInCurve: AppMotion.curve,
+        switchOutCurve: AppMotion.curve,
+        child: Text(
+          eta.text,
+          key: ValueKey(eta.text),
+          textAlign: TextAlign.center,
+          softWrap: true,
+          maxLines: 2,
+          style: TextStyle(
+            color: eta.foregroundColor,
+            fontWeight: FontWeight.w700,
+            fontSize: fontSize,
+            height: 1.1,
+          ),
         ),
       ),
     );
