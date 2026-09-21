@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import 'package:latlong2/latlong.dart';
 
@@ -22,7 +23,6 @@ import '../widgets/bus_map_geometry.dart';
 import '../widgets/bus_map_markers.dart';
 import '../widgets/bus_map_motion.dart';
 import '../widgets/platform_map_provider.dart';
-import 'adaptive_settings_presenter.dart';
 import 'route_detail_navigation.dart';
 
 /// Every bus in one city on one map.
@@ -327,6 +327,9 @@ class _BusMapScreenState extends State<BusMapScreen>
 
   Future<void> _initializeMap() async {
     await _loadBuses(fitCamera: true);
+    if (mounted) {
+      await _locateMe();
+    }
   }
 
   void _applySnapshot(CityBusSnapshot snapshot) {
@@ -649,23 +652,28 @@ class _BusMapScreenState extends State<BusMapScreen>
       if (mounted && showFeedback) {
         _showLocationHint(
           friendlyErrorMessage(error),
-          offerSettings: error is LocationFailure && error.deniedForever,
+          failure: error is LocationFailure ? error : null,
         );
       }
     }
   }
 
-  void _showLocationHint(String message, {bool offerSettings = false}) {
+  void _showLocationHint(String message, {LocationFailure? failure}) {
     if (!mounted) {
       return;
     }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        action: offerSettings
+        action: failure?.serviceDisabled == true
             ? SnackBarAction(
-                label: '前往設定',
-                onPressed: () => openAdaptiveSettingsScreen(context),
+                label: '定位設定',
+                onPressed: () => unawaited(Geolocator.openLocationSettings()),
+              )
+            : failure?.deniedForever == true
+            ? SnackBarAction(
+                label: '權限設定',
+                onPressed: () => unawaited(Geolocator.openAppSettings()),
               )
             : null,
       ),

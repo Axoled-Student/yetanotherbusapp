@@ -439,7 +439,7 @@ void main() {
     expect(log.count('/cities/TPE/buses'), 1);
   });
 
-  _mapTest('does not request location permission until the rider asks', (
+  _mapTest('requests location on open and lets the rider retry', (
     tester,
     log,
     controller,
@@ -447,15 +447,16 @@ void main() {
     await _pumpMap(tester, controller);
     await _pumpUntil(
       tester,
-      () => find.byType(BusMapBusMarker).evaluate().isNotEmpty,
+      () => _FakeGeolocator.requestCount == 1,
+      reason: 'the initial location request never ran',
     );
 
-    expect(_FakeGeolocator.requestCount, 0);
+    expect(find.byType(BusMapBusMarker), findsWidgets);
 
     await tester.tap(find.byTooltip('定位'));
     await tester.pump();
 
-    expect(_FakeGeolocator.requestCount, 1);
+    expect(_FakeGeolocator.requestCount, 2);
     expect(find.text('沒有取得定位權限。'), findsOneWidget);
   });
 

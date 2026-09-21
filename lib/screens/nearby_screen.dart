@@ -9,6 +9,7 @@ import '../core/bus_repository.dart';
 import '../core/friendly_error.dart';
 import '../core/models.dart';
 import '../core/route_direction_label.dart';
+import '../core/user_location.dart';
 import 'adaptive_settings_presenter.dart';
 import '../widgets/background_image_wrapper.dart';
 import '../widgets/eta_badge.dart';
@@ -36,6 +37,7 @@ class _NearbyStopGroup {
 class _NearbyScreenState extends State<NearbyScreen> {
   bool _loading = true;
   String? _error;
+  LocationFailure? _locationFailure;
   List<NearbyStopResult> _results = const [];
   Map<String, LiveStopMap> _liveMaps = const {};
   bool _loadingEtas = false;
@@ -55,26 +57,13 @@ class _NearbyScreenState extends State<NearbyScreen> {
     setState(() {
       _loading = true;
       _error = null;
+      _locationFailure = null;
       _liveMaps = const {};
       _loadingEtas = false;
     });
 
     try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        throw StateError('定位服務尚未開啓。');
-      }
-
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        throw StateError('沒有取得定位權限。');
-      }
-
-      final position = await Geolocator.getCurrentPosition();
+      final position = await resolveUserPosition();
       final results = await controller.getNearbyStops(
         latitude: position.latitude,
         longitude: position.longitude,
@@ -104,6 +93,7 @@ class _NearbyScreenState extends State<NearbyScreen> {
       setState(() {
         _results = const [];
         _error = friendlyErrorMessage(error);
+        _locationFailure = error is LocationFailure ? error : null;
       });
     } finally {
       if (mounted && requestGeneration == _requestGeneration) {
@@ -463,10 +453,22 @@ class _NearbyScreenState extends State<NearbyScreen> {
                               child: const Text('重試'),
                             ),
                             OutlinedButton(
-                              onPressed: () {
-                                openAdaptiveSettingsScreen(context);
-                              },
-                              child: const Text('前往設定'),
+                              onPressed:
+                                  _locationFailure?.serviceDisabled == true
+                                  ? () => unawaited(
+                                      Geolocator.openLocationSettings(),
+                                    )
+                                  : _locationFailure?.deniedForever == true
+                                  ? () =>
+                                        unawaited(Geolocator.openAppSettings())
+                                  : () => openAdaptiveSettingsScreen(context),
+                              child: Text(
+                                _locationFailure?.serviceDisabled == true
+                                    ? '定位設定'
+                                    : _locationFailure?.deniedForever == true
+                                    ? '權限設定'
+                                    : '前往設定',
+                              ),
                             ),
                           ],
                         ),
