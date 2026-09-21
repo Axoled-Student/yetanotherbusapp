@@ -73,17 +73,18 @@ async function serveStatic(request, env) {
   const response = await env.ASSETS.fetch(request);
   const headers = new Headers(response.headers);
   const path = new URL(request.url).pathname;
+  const isFont = /\.(?:otf|ttf|woff2?)$/i.test(path);
   const noStorePaths = new Set([
     '/sw.js',
     '/firebase-messaging-sw.js',
     '/flutter_service_worker.js',
   ]);
-  headers.set(
-    'cache-control',
-    noStorePaths.has(path)
-      ? 'no-store'
-      : 'public, max-age=0, must-revalidate',
-  );
+  const cacheControl = noStorePaths.has(path)
+    ? 'no-store'
+    : isFont
+      ? 'public, max-age=604800, stale-while-revalidate=2592000'
+      : 'public, max-age=0, must-revalidate';
+  headers.set('cache-control', cacheControl);
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
