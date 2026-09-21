@@ -522,6 +522,7 @@ class _RouteBusMapSheetState extends State<RouteBusMapSheet>
         now: DateTime.now(),
         refreshSeconds: _refreshSeconds,
         keyOf: (bus) => '${bus.routeId}:${bus.id}',
+        terminalStops: _stopsByPath[pathId] ?? const <StopInfo>[],
       );
       final focusedBusId =
           widget.focusedVehicleRequest != _handledVehicleFocusRequest

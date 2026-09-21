@@ -24,6 +24,10 @@ const double kBusSnapToRouteThresholdMeters = 180.0;
 /// Beyond this, the bus is treated as off-route and dead-reckoned.
 const double kBusOffRouteThresholdMeters = 320.0;
 
+/// Near a terminal, showing only reported positions is less misleading than
+/// projecting a bus forward while it may be laying over or waiting to depart.
+const double kBusTerminalMotionSuppressionRadiusMeters = 100.0;
+
 String _busIdKey(RouteRealtimeBus bus) => bus.id;
 
 enum BusMotionMode { snappedToRoute, freeFloating }
@@ -100,6 +104,7 @@ Map<String, AnimatedBusState> buildAnimatedBusStates(
   required DateTime now,
   required int refreshSeconds,
   String Function(RouteRealtimeBus bus) keyOf = _busIdKey,
+  List<StopInfo> terminalStops = const <StopInfo>[],
 }) {
   final nextStates = <String, AnimatedBusState>{};
 
@@ -111,7 +116,15 @@ Map<String, AnimatedBusState> buildAnimatedBusStates(
     final key = keyOf(bus);
     final projection = geometry?.project(rawPoint);
     final previous = previousStates[key];
-    final speedMps = (((bus.speedKph ?? 0) / 3.6).clamp(0, 36)).toDouble();
+    final isNearTerminal = _isNearTerminal(
+      bus,
+      rawPoint,
+      geometry,
+      terminalStops,
+    );
+    final speedMps = isNearTerminal
+        ? 0.0
+        : (((bus.speedKph ?? 0) / 3.6).clamp(0, 36)).toDouble();
     final status = describeBusStatus(bus.statusCode);
     final sampleTime = effectiveBusSampleTime(
       bus.updatedAt,
@@ -129,7 +142,7 @@ Map<String, AnimatedBusState> buildAnimatedBusStates(
         sampleTime,
         geometry: geometry,
       );
-      if (predictedPrevious != null) {
+      if (!isNearTerminal && predictedPrevious != null) {
         final delta = baseDistance - predictedPrevious;
         if (delta.abs() <= 180) {
           // Nudge toward the new fix instead of jumping, and lean against
@@ -156,7 +169,7 @@ Map<String, AnimatedBusState> buildAnimatedBusStates(
     }
 
     var basePoint = rawPoint;
-    if (previous != null) {
+    if (!isNearTerminal && previous != null) {
       final predicted = previous.positionAt(sampleTime, geometry: geometry);
       final gap = distanceMetersBetween(predicted, rawPoint);
       if (gap <= kBusSnapToRouteThresholdMeters) {
@@ -178,6 +191,45 @@ Map<String, AnimatedBusState> buildAnimatedBusStates(
   }
 
   return nextStates;
+}
+
+bool _isNearTerminal(
+  RouteRealtimeBus bus,
+  LatLng point,
+  RouteGeometry? geometry,
+  List<StopInfo> terminalStops,
+) {
+  final matchingStops =
+      terminalStops
+          .where(
+            (stop) =>
+                (bus.pathId == null || stop.pathId == bus.pathId) &&
+                toLatLngIfValid(stop.lat, stop.lon) != null,
+          )
+          .toList(growable: false)
+        ..sort((left, right) => left.sequence.compareTo(right.sequence));
+
+  final List<LatLng> terminalPoints;
+  if (matchingStops.isNotEmpty) {
+    terminalPoints = [
+      toLatLngIfValid(matchingStops.first.lat, matchingStops.first.lon)!,
+      if (matchingStops.length > 1)
+        toLatLngIfValid(matchingStops.last.lat, matchingStops.last.lon)!,
+    ];
+  } else if (geometry != null && geometry.points.isNotEmpty) {
+    terminalPoints = [
+      geometry.points.first,
+      if (geometry.points.length > 1) geometry.points.last,
+    ];
+  } else {
+    terminalPoints = const [];
+  }
+
+  return terminalPoints.any(
+    (terminal) =>
+        distanceMetersBetween(point, terminal) <=
+        kBusTerminalMotionSuppressionRadiusMeters,
+  );
 }
 
 /// When a reported position should be treated as having been taken.

@@ -39,6 +39,18 @@ RouteRealtimeBus _bus({
   );
 }
 
+StopInfo _stop({required int sequence, required double lat}) {
+  return StopInfo(
+    routeKey: 1,
+    pathId: 0,
+    stopId: sequence,
+    stopName: 'Terminal $sequence',
+    sequence: sequence,
+    lon: 121.5490,
+    lat: lat,
+  );
+}
+
 void main() {
   group('RouteGeometry', () {
     test('measures the line and walks along it by distance', () {
@@ -204,6 +216,41 @@ void main() {
         state.positionAt(now.add(const Duration(minutes: 5))),
         state.rawPoint,
       );
+    });
+
+    test('buses at either terminal stop are not projected forward', () {
+      final geometry = _line();
+      final terminalStops = [
+        _stop(sequence: 1, lat: 25.0320),
+        _stop(sequence: 2, lat: 25.0380),
+      ];
+
+      for (final terminal in terminalStops) {
+        final state = buildAnimatedBusStates(
+          geometry,
+          [
+            _bus(
+              id: '${terminal.sequence}',
+              lat: terminal.lat,
+              lon: terminal.lon,
+              speedKph: 36,
+              azimuth: 0,
+            ),
+          ],
+          const {},
+          now: now,
+          refreshSeconds: 10,
+          terminalStops: terminalStops,
+        ).values.single;
+
+        final later = state.positionAt(
+          now.add(const Duration(seconds: 10)),
+          geometry: geometry,
+        );
+        expect(state.speedMps, 0);
+        expect(later.latitude, closeTo(terminal.lat, 1e-9));
+        expect(later.longitude, closeTo(terminal.lon, 1e-9));
+      }
     });
   });
 

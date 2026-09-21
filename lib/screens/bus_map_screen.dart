@@ -366,6 +366,7 @@ class _BusMapScreenState extends State<BusMapScreen>
         now: now,
         refreshSeconds: refreshSeconds,
         keyOf: keyOf,
+        terminalStops: _selectedStops,
       ),
     };
 
@@ -520,6 +521,7 @@ class _BusMapScreenState extends State<BusMapScreen>
       now: DateTime.now(),
       refreshSeconds: _refreshSeconds,
       keyOf: (bus) => '${bus.routeId}|${bus.id}',
+      terminalStops: _selectedStops,
     );
     setState(() => _busStates = {..._busStates, ...states});
   }
