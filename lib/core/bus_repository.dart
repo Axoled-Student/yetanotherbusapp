@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -13,6 +14,7 @@ import 'api_config.dart';
 import 'http_error_utils.dart';
 import 'models.dart';
 import 'native_sqlite_bridge.dart';
+import 'route_family.dart';
 import 'route_search_ranking.dart';
 
 class DatabaseNotReadyException implements Exception {
@@ -41,9 +43,10 @@ class BusRepository {
   Map<String, String> get _apiJsonHeaders =>
       ApiUserAgent.applyTo(apiJsonHeaders);
   static const _routeDetailCacheTtl = Duration(seconds: 2);
+  static const _routeTopologyCacheTtl = Duration(minutes: 30);
+  static const _routeFamilyCacheTtl = Duration(minutes: 30);
   static const _searchApiCacheTtl = Duration(seconds: 2);
   static const _realtimeCacheTtl = Duration(seconds: 2);
-  static const _batchRealtimeCacheTtl = Duration(seconds: 2);
   static const _routeStopsApiCacheTtl = Duration(minutes: 30);
   static const _routePathGeometryCacheTtl = Duration(minutes: 30);
   static const _routeRealtimeBusesCacheTtl = Duration(seconds: 2);
@@ -52,11 +55,41 @@ class BusRepository {
   static const _taichungCityBusScheduleUrl =
       'https://citybus.taichung.gov.tw/getschedule.php';
   static const _taichungRouteIndexCacheTtl = Duration(hours: 1);
-  static const _taichungCancelledDepartureCacheTtl = Duration(minutes: 2);
+  static const _taichungCancelledDepartureCacheTtl = Duration(hours: 2);
   final Map<String, _TimedValue<RouteDetailData>> _routeDetailCache =
       <String, _TimedValue<RouteDetailData>>{};
   final Map<String, Future<RouteDetailData>> _routeDetailInFlight =
       <String, Future<RouteDetailData>>{};
+  int _routeDataGeneration = 0;
+  final Map<String, _TimedValue<RouteDetailData>> _routeTopologyCache =
+      <String, _TimedValue<RouteDetailData>>{};
+  final Map<String, Future<RouteDetailData>> _routeTopologyInFlight =
+      <String, Future<RouteDetailData>>{};
+  final Map<String, _TimedValue<List<RouteSummary>>> _routeFamilyCache =
+      <String, _TimedValue<List<RouteSummary>>>{};
+  final Map<String, Future<List<RouteSummary>>> _routeFamilyInFlight =
+      <String, Future<List<RouteSummary>>>{};
+
+  /// Invalidates route work so responses started against replaced data are ignored.
+  void invalidateRouteData() {
+    _routeDataGeneration++;
+    _clearAllStaticRouteCaches();
+    _realtimeCache.clear();
+    _realtimeInFlight.clear();
+    _routeRealtimeBusesCache.clear();
+    _routeRealtimeBusesInFlight.clear();
+    _routeDetailCache.clear();
+    _routeDetailInFlight.clear();
+    _routeStopsApiCache.clear();
+    _routeStopsApiInFlight.clear();
+    _routePathGeometryCache.clear();
+    _routePathGeometryInFlight.clear();
+    _searchRoutesApiCache.clear();
+    _searchRoutesApiInFlight.clear();
+  }
+
+  final Map<BusProvider, int> _staticRouteCacheGeneration =
+      <BusProvider, int>{};
   final Map<String, _TimedValue<List<RouteSummary>>> _searchRoutesApiCache =
       <String, _TimedValue<List<RouteSummary>>>{};
   final Map<String, Future<List<RouteSummary>>> _searchRoutesApiInFlight =
@@ -65,10 +98,6 @@ class BusRepository {
       <String, _TimedValue<LiveStopMap>>{};
   final Map<String, Future<LiveStopMap>> _realtimeInFlight =
       <String, Future<LiveStopMap>>{};
-  final Map<String, _TimedValue<BatchLiveStopMap>> _batchRealtimeCache =
-      <String, _TimedValue<BatchLiveStopMap>>{};
-  final Map<String, Future<BatchLiveStopMap>> _batchRealtimeInFlight =
-      <String, Future<BatchLiveStopMap>>{};
   final Map<String, _TimedValue<Map<String, dynamic>>> _routeStopsApiCache =
       <String, _TimedValue<Map<String, dynamic>>>{};
   final Map<String, Future<Map<String, dynamic>>> _routeStopsApiInFlight =
@@ -81,6 +110,13 @@ class BusRepository {
   _routeRealtimeBusesCache = <String, _TimedValue<List<RouteRealtimeBus>>>{};
   final Map<String, Future<List<RouteRealtimeBus>>>
   _routeRealtimeBusesInFlight = <String, Future<List<RouteRealtimeBus>>>{};
+  // Short: the server already caches a city snapshot for its own TTL, so this
+  // only collapses the burst a screen makes when it rebuilds.
+  static const _cityBusesCacheTtl = Duration(seconds: 3);
+  final Map<String, _TimedValue<CityBusSnapshot>> _cityBusesCache =
+      <String, _TimedValue<CityBusSnapshot>>{};
+  final Map<String, Future<CityBusSnapshot>> _cityBusesInFlight =
+      <String, Future<CityBusSnapshot>>{};
   _TimedValue<Map<String, List<int>>>? _taichungRouteIndexCache;
   Future<Map<String, List<int>>>? _taichungRouteIndexInFlight;
   final Map<String, _TimedValue<List<CancelledDeparture>>>
@@ -89,7 +125,7 @@ class BusRepository {
   final Map<String, Future<List<CancelledDeparture>>>
   _taichungCancelledDepartureInFlight =
       <String, Future<List<CancelledDeparture>>>{};
-  static const _routeAlertsCacheTtl = Duration(minutes: 10);
+  static const _routeAlertsCacheTtl = Duration(hours: 2);
   final Map<String, _TimedValue<List<RouteAlert>>> _routeAlertsCache =
       <String, _TimedValue<List<RouteAlert>>>{};
   final Map<String, Future<List<RouteAlert>>> _routeAlertsInFlight =
@@ -109,7 +145,7 @@ class BusRepository {
       return false;
     }
     if (!await _looksLikeSqliteFile(metadataFile)) {
-      await _deleteDatabaseArtifacts(metadataFile);
+      await _markMetadataDatabaseInvalid(metadataFile);
       return false;
     }
     if (!await _looksLikeSqliteFile(cityFile)) {
@@ -121,7 +157,7 @@ class BusRepository {
       try {
         await _validateMetadataDatabaseFileWithSqlite3(metadataFile);
       } catch (_) {
-        await _deleteDatabaseArtifacts(metadataFile);
+        await _markMetadataDatabaseInvalid(metadataFile);
         return false;
       }
 
@@ -146,7 +182,7 @@ class BusRepository {
         await metadataDatabase.close();
       }
     } catch (_) {
-      await _deleteDatabaseArtifacts(metadataFile);
+      await _markMetadataDatabaseInvalid(metadataFile);
       return false;
     }
 
@@ -182,6 +218,7 @@ class BusRepository {
   }
 
   Future<void> deleteProviderDatabase(BusProvider provider) async {
+    invalidateRouteData();
     if (!_supportsLocalDatabase) {
       return;
     }
@@ -189,6 +226,7 @@ class BusRepository {
     if (await file.exists()) {
       await file.delete();
     }
+    _clearStaticRouteCaches(provider);
 
     final versions = await _readVersionMap();
     versions.remove(provider.name);
@@ -226,6 +264,7 @@ class BusRepository {
   }
 
   Future<void> downloadDatabase(BusProvider provider) async {
+    invalidateRouteData();
     if (!provider.supportsLocalDatabase) {
       throw UnsupportedError('公路客運不提供離線資料庫下載。');
     }
@@ -256,9 +295,11 @@ class BusRepository {
         previousMetadataFile: previousMetadataFile,
         previousCityFile: previousCityFile,
       );
+      _clearAllStaticRouteCaches();
       await _deleteDatabaseArtifacts(previousMetadataFile);
       await _deleteDatabaseArtifacts(previousCityFile);
     } finally {
+      invalidateRouteData();
       await _deleteDatabaseArtifacts(tempMetadataFile);
       await _deleteDatabaseArtifacts(tempCityFile);
     }
@@ -281,7 +322,7 @@ class BusRepository {
         throw DatabaseNotReadyException('尚未下載路線資料庫。');
       }
       if (!await _looksLikeSqliteFile(file)) {
-        await _deleteDatabaseArtifacts(file);
+        await _markMetadataDatabaseInvalid(file);
         throw DatabaseNotReadyException('路線資料庫已損壞，請重新下載。');
       }
 
@@ -428,6 +469,114 @@ class BusRepository {
     );
   }
 
+  Future<Set<String>> routeNames({required BusProvider provider}) async {
+    final rows = await _loadMetadataPathRows(provider: provider);
+    return rows
+        .map((row) => row.routeName.trim())
+        .where((routeName) => routeName.isNotEmpty)
+        .toSet();
+  }
+
+  /// Finds variants of [route] that share its supported trunk-route suffix.
+  ///
+  /// The backend has no route-family identifier, so this intentionally uses
+  /// the same name rule as the route search UI and never crosses providers.
+  Future<List<RouteSummary>> getRouteFamily(
+    RouteSummary route, {
+    required BusProvider provider,
+  }) async {
+    final familyName = routeFamilyName(route.routeName);
+    final cacheKey = '${provider.name}:$familyName';
+    final cached = _readFreshCache(
+      _routeFamilyCache,
+      cacheKey,
+      _routeFamilyCacheTtl,
+    );
+    if (cached != null) {
+      return _withSelectedFamilyRoute(cached, route);
+    }
+
+    final inFlight = _routeFamilyInFlight[cacheKey];
+    if (inFlight != null) {
+      return _withSelectedFamilyRoute(await inFlight, route);
+    }
+
+    final future = _loadRouteFamily(route, provider: provider);
+    final generation = _staticRouteCacheGeneration[provider] ?? 0;
+    _routeFamilyInFlight[cacheKey] = future;
+    try {
+      final family = await future;
+      if ((_staticRouteCacheGeneration[provider] ?? 0) == generation) {
+        _routeFamilyCache[cacheKey] = _TimedValue<List<RouteSummary>>(family);
+      }
+      return _withSelectedFamilyRoute(family, route);
+    } finally {
+      if (identical(_routeFamilyInFlight[cacheKey], future)) {
+        _routeFamilyInFlight.remove(cacheKey);
+      }
+    }
+  }
+
+  Future<List<RouteSummary>> _loadRouteFamily(
+    RouteSummary route, {
+    required BusProvider provider,
+  }) async {
+    final familyName = routeFamilyName(route.routeName);
+    var candidates = <RouteSummary>[];
+    try {
+      candidates = await searchRoutes(
+        familyName,
+        provider: provider,
+        limit: 120,
+      );
+    } on DatabaseNotReadyException {
+      // The API below supplies the family when no local database is available.
+    }
+
+    final hasSibling = candidates.any(
+      (candidate) =>
+          candidate.routeId != route.routeId &&
+          routeFamilyName(candidate.routeName) == familyName,
+    );
+    if (!hasSibling) {
+      candidates = [
+        ...candidates,
+        ...await searchRoutesFromApi(
+          familyName,
+          provider: provider,
+          limit: 120,
+        ),
+      ];
+    }
+
+    final family = <RouteSummary>[route];
+    final routeIds = <String>{route.routeId};
+    for (final candidate in candidates) {
+      if (routeFamilyName(candidate.routeName) != familyName ||
+          !routeIds.add(candidate.routeId)) {
+        continue;
+      }
+      family.add(candidate);
+    }
+    family.sort((left, right) => left.routeName.compareTo(right.routeName));
+    return family;
+  }
+
+  List<RouteSummary> _withSelectedFamilyRoute(
+    List<RouteSummary> family,
+    RouteSummary selected,
+  ) {
+    final result = <RouteSummary>[selected];
+    final routeIds = <String>{selected.routeId};
+    for (final route in family) {
+      if (routeIds.add(route.routeId)) {
+        result.add(route);
+      }
+    }
+    result.sort((left, right) => left.routeName.compareTo(right.routeName));
+    return result;
+  }
+
   Future<List<StopRouteSearchResult>> searchRoutesByStopName(
     String query, {
     required BusProvider provider,
@@ -528,7 +677,7 @@ class BusRepository {
       return false;
     }
     if (!await _looksLikeSqliteFile(metadataFile)) {
-      await _deleteDatabaseArtifacts(metadataFile);
+      await _markMetadataDatabaseInvalid(metadataFile);
       return false;
     }
 
@@ -537,7 +686,7 @@ class BusRepository {
         await _validateMetadataDatabaseFileWithSqlite3(metadataFile);
         return true;
       } catch (_) {
-        await _deleteDatabaseArtifacts(metadataFile);
+        await _markMetadataDatabaseInvalid(metadataFile);
         return false;
       }
     }
@@ -555,7 +704,7 @@ class BusRepository {
       }
       return true;
     } catch (_) {
-      await _deleteDatabaseArtifacts(metadataFile);
+      await _markMetadataDatabaseInvalid(metadataFile);
       return false;
     }
   }
@@ -655,7 +804,7 @@ class BusRepository {
       );
     }
 
-    final decoded = jsonDecode(apiResponseText(response)) as List<dynamic>;
+    final decoded = await apiDecodeJsonResponseAsync(response) as List<dynamic>;
     final summaries = decoded
         .whereType<Map>()
         .map((row) {
@@ -692,7 +841,7 @@ class BusRepository {
       throw HttpException('無法查詢全部路線 (${response.statusCode})。');
     }
 
-    final decoded = jsonDecode(apiResponseText(response)) as List<dynamic>;
+    final decoded = await apiDecodeJsonResponseAsync(response) as List<dynamic>;
     final summaries = decoded
         .whereType<Map>()
         .map((row) {
@@ -806,7 +955,7 @@ class BusRepository {
     if (response.statusCode != 200) {
       return null;
     }
-    final decoded = jsonDecode(apiResponseText(response)) as List<dynamic>;
+    final decoded = await apiDecodeJsonResponseAsync(response) as List<dynamic>;
     final rows = decoded
         .whereType<Map>()
         .map((row) {
@@ -889,7 +1038,7 @@ class BusRepository {
     if (response.statusCode != 200) {
       return const [];
     }
-    final decoded = jsonDecode(apiResponseText(response)) as List<dynamic>;
+    final decoded = await apiDecodeJsonResponseAsync(response) as List<dynamic>;
     return decoded
         .whereType<Map>()
         .where((row) => (row['routeid']?.toString() ?? '') == routeId)
@@ -1074,10 +1223,13 @@ class BusRepository {
       routeId: routeId,
       routeNameHint: routeNameHint,
     );
+    final generation = _routeDataGeneration;
     _routeDetailInFlight[cacheKey] = future;
     try {
       final detail = await future;
-      _routeDetailCache[cacheKey] = _TimedValue<RouteDetailData>(detail);
+      if (generation == _routeDataGeneration) {
+        _routeDetailCache[cacheKey] = _TimedValue<RouteDetailData>(detail);
+      }
       return detail;
     } finally {
       if (identical(_routeDetailInFlight[cacheKey], future)) {
@@ -1086,41 +1238,274 @@ class BusRepository {
     }
   }
 
+  Future<RouteDetailData> getRouteTopology(
+    int routeKey, {
+    required BusProvider provider,
+    String? routeIdHint,
+    String? routeNameHint,
+  }) async {
+    final routeId =
+        routeIdHint ?? await _resolveRouteIdByRouteKey(provider, routeKey);
+    if (routeId == null || routeId.isEmpty) {
+      throw StateError('找不到路線 $routeKey');
+    }
+    return _getRouteTopologyById(
+      provider: provider,
+      routeId: routeId,
+      routeNameHint: routeNameHint,
+    );
+  }
+
+  Future<RouteDetailData> _getRouteTopologyById({
+    required BusProvider provider,
+    required String routeId,
+    String? routeNameHint,
+  }) async {
+    final cacheKey = '${provider.name}:$routeId';
+    final cached = _readFreshCache(
+      _routeTopologyCache,
+      cacheKey,
+      _routeTopologyCacheTtl,
+    );
+    if (cached != null) {
+      return _applyRouteNameHint(cached, routeNameHint);
+    }
+
+    final inFlight = _routeTopologyInFlight[cacheKey];
+    if (inFlight != null) {
+      return _applyRouteNameHint(await inFlight, routeNameHint);
+    }
+
+    final future = _loadRouteTopology(
+      provider: provider,
+      routeId: routeId,
+      routeNameHint: null,
+    );
+    final generation = _staticRouteCacheGeneration[provider] ?? 0;
+    _routeTopologyInFlight[cacheKey] = future;
+    try {
+      final topology = await future;
+      if ((_staticRouteCacheGeneration[provider] ?? 0) == generation) {
+        _routeTopologyCache[cacheKey] = _TimedValue<RouteDetailData>(topology);
+      }
+      return _applyRouteNameHint(topology, routeNameHint);
+    } finally {
+      if (identical(_routeTopologyInFlight[cacheKey], future)) {
+        _routeTopologyInFlight.remove(cacheKey);
+      }
+    }
+  }
+
+  Future<RouteDetailData> getCompleteRouteFamilyBusInfo(
+    int routeKey, {
+    required BusProvider provider,
+    String? routeIdHint,
+    String? routeNameHint,
+  }) async {
+    final selected = await getCompleteBusInfo(
+      routeKey,
+      provider: provider,
+      routeIdHint: routeIdHint,
+      routeNameHint: routeNameHint,
+    );
+    return enrichRouteWithFamily(selected, provider: provider);
+  }
+
+  Future<RouteDetailData> enrichRouteWithFamily(
+    RouteDetailData selected, {
+    required BusProvider provider,
+  }) async {
+    try {
+      final family = await getRouteFamily(selected.route, provider: provider);
+      final variants = await Future.wait(
+        family.where((route) => route.routeId != selected.route.routeId).map((
+          route,
+        ) async {
+          try {
+            return await getCompleteBusInfo(
+              route.routeKey,
+              provider: provider,
+              routeIdHint: route.routeId,
+              routeNameHint: route.routeName,
+            );
+          } catch (_) {
+            return null;
+          }
+        }),
+      );
+      return mergeRouteFamilyLiveData(
+        selected,
+        variants.whereType<RouteDetailData>().toList(growable: false),
+      );
+    } catch (_) {
+      // Variants supplement a route but must not prevent the selected route
+      // from being displayed when the family lookup is unavailable.
+      return selected;
+    }
+  }
+
+  /// Emits route topology, selected-route realtime, then family realtime.
+  Stream<RouteDetailUpdate> watchRouteDetail(
+    int routeKey, {
+    required BusProvider provider,
+    String? routeIdHint,
+    String? routeNameHint,
+  }) async* {
+    final generation = _routeDataGeneration;
+    final routeId =
+        routeIdHint ?? await _resolveRouteIdByRouteKey(provider, routeKey);
+    if (routeId == null || routeId.isEmpty) {
+      throw StateError('找不到路線 $routeKey');
+    }
+
+    final topologyFuture = _getRouteTopologyById(
+      provider: provider,
+      routeId: routeId,
+      routeNameHint: routeNameHint,
+    );
+    // Attach error handling immediately: realtime may fail before stops finish.
+    final liveFuture = _loadLiveStopResult(routeId);
+    final topology = await topologyFuture;
+    if (generation != _routeDataGeneration) return;
+
+    final familyFuture = _loadFamilyTopologies(topology.route, provider);
+    yield RouteDetailUpdate(detail: topology, phase: RouteDetailPhase.stops);
+
+    final liveResult = await liveFuture;
+    if (generation != _routeDataGeneration) return;
+    final selected = _applyLiveStopMap(
+      topology,
+      liveResult.liveMap,
+      hasLiveData: liveResult.hasLiveData,
+    );
+    yield RouteDetailUpdate(detail: selected, phase: RouteDetailPhase.realtime);
+
+    final variants = await familyFuture;
+    if (generation != _routeDataGeneration) return;
+    if (variants == null) {
+      yield RouteDetailUpdate(
+        detail: selected,
+        phase: RouteDetailPhase.family,
+        familyUnavailable: true,
+      );
+      return;
+    }
+    if (variants.isEmpty) {
+      yield RouteDetailUpdate(detail: selected, phase: RouteDetailPhase.family);
+      return;
+    }
+
+    try {
+      final maps = await getBatchLiveStopMaps(
+        variants.map((detail) => detail.route.routeId).toList(),
+      );
+      if (generation != _routeDataGeneration) return;
+      final detail = mergeRouteFamilyLiveData(
+        selected,
+        variants
+            .map(
+              (variant) => _applyLiveStopMap(
+                variant,
+                maps[variant.route.routeId] ??
+                    const <String, LiveStopPayload>{},
+                hasLiveData: maps.containsKey(variant.route.routeId),
+              ),
+            )
+            .toList(growable: false),
+      );
+      yield RouteDetailUpdate(
+        detail: detail,
+        phase: RouteDetailPhase.family,
+        familyUnavailable: variants.any(
+          (variant) => !maps.containsKey(variant.route.routeId),
+        ),
+      );
+    } catch (_) {
+      if (generation != _routeDataGeneration) return;
+      yield RouteDetailUpdate(
+        detail: selected,
+        phase: RouteDetailPhase.family,
+        familyUnavailable: true,
+      );
+    }
+  }
+
+  Future<List<RouteDetailData>?> _loadFamilyTopologies(
+    RouteSummary selected,
+    BusProvider provider,
+  ) async {
+    final generation = _routeDataGeneration;
+    try {
+      final family = await getRouteFamily(selected, provider: provider);
+      if (generation != _routeDataGeneration) return null;
+      return await Future.wait(
+        family
+            .where((route) => route.routeId != selected.routeId)
+            .map(
+              (route) => _getRouteTopologyById(
+                provider: provider,
+                routeId: route.routeId,
+                routeNameHint: route.routeName,
+              ),
+            ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<RouteDetailData> _loadCompleteBusInfo({
     required BusProvider provider,
     required String routeId,
     String? routeNameHint,
   }) async {
+    final results = await Future.wait<Object>([
+      _getRouteTopologyById(
+        provider: provider,
+        routeId: routeId,
+        routeNameHint: routeNameHint,
+      ),
+      _loadLiveStopResult(routeId),
+    ]);
+    final topology = results[0] as RouteDetailData;
+    final liveResult = results[1] as _LiveStopResult;
+    return _applyLiveStopMap(
+      topology,
+      liveResult.liveMap,
+      hasLiveData: liveResult.hasLiveData,
+    );
+  }
+
+  Future<RouteDetailData> _loadRouteTopology({
+    required BusProvider provider,
+    required String routeId,
+    String? routeNameHint,
+  }) async {
     try {
-      final routeRows = await _loadMetadataPathRows(
-        provider: provider,
-        routeId: routeId,
-      );
-      final stopRows = await _loadCityStopRows(
-        provider: provider,
-        routeId: routeId,
-      );
-
-      var hasLiveData = true;
-      LiveStopMap liveMap;
-      try {
-        liveMap = await _getLiveStopMap(routeId);
-      } catch (_) {
-        hasLiveData = false;
-        liveMap = const <String, LiveStopPayload>{};
+      final results = await Future.wait<Object>([
+        _loadMetadataPathRows(provider: provider, routeId: routeId),
+        _loadCityStopRows(provider: provider, routeId: routeId),
+      ]);
+      final routeRows = results[0] as List<_MetadataPathRow>;
+      final stopRows = results[1] as List<_CityStopRow>;
+      if (routeRows.isEmpty || stopRows.isEmpty) {
+        return _buildRouteTopologyFromApi(
+          provider: provider,
+          routeId: routeId,
+          routeNameHint: routeNameHint,
+        );
       }
-
       return _buildRouteDetailFromLocalRows(
         provider: provider,
         routeId: routeId,
         routeRows: routeRows,
         stopRows: stopRows,
         routeNameHint: routeNameHint,
-        hasLiveData: hasLiveData,
-        liveMap: liveMap,
+        hasLiveData: false,
+        liveMap: const <String, LiveStopPayload>{},
       );
     } on DatabaseNotReadyException {
-      return _buildRouteDetailFromApi(
+      return _buildRouteTopologyFromApi(
         provider: provider,
         routeId: routeId,
         routeNameHint: routeNameHint,
@@ -1128,7 +1513,22 @@ class BusRepository {
     }
   }
 
+  Future<_LiveStopResult> _loadLiveStopResult(String routeId) async {
+    try {
+      return _LiveStopResult(
+        liveMap: await _getLiveStopMap(routeId),
+        hasLiveData: true,
+      );
+    } catch (_) {
+      return const _LiveStopResult(
+        liveMap: <String, LiveStopPayload>{},
+        hasLiveData: false,
+      );
+    }
+  }
+
   Future<Map<String, dynamic>> _loadRouteStopsPayload(String routeId) async {
+    final generation = _routeDataGeneration;
     final cached = _readFreshCache(
       _routeStopsApiCache,
       routeId,
@@ -1147,7 +1547,11 @@ class BusRepository {
     _routeStopsApiInFlight[routeId] = future;
     try {
       final payload = await future;
-      _routeStopsApiCache[routeId] = _TimedValue<Map<String, dynamic>>(payload);
+      if (generation == _routeDataGeneration) {
+        _routeStopsApiCache[routeId] = _TimedValue<Map<String, dynamic>>(
+          payload,
+        );
+      }
       return payload;
     } finally {
       if (identical(_routeStopsApiInFlight[routeId], future)) {
@@ -1170,7 +1574,7 @@ class BusRepository {
       throw HttpException('無法取得 $routeId 的路線站牌 (${response.statusCode})。');
     }
 
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     if (decoded is! Map<String, dynamic>) {
       throw const FormatException('Route stop payload is invalid.');
     }
@@ -1185,78 +1589,12 @@ class BusRepository {
     int limit = 20,
   }) async {
     try {
-      final latDelta = radiusMeters / 111320;
-      final lonDelta =
-          radiusMeters / (111320 * math.cos(latitude * math.pi / 180)).abs();
-      final rows = await _loadCityStopRows(
+      final results = await _fetchNearbyStopsFromLocal(
         provider: provider,
         latitude: latitude,
         longitude: longitude,
-        latDelta: latDelta,
-        lonDelta: lonDelta,
-        limit: 500,
-      );
-
-      final results = <NearbyStopResult>[];
-      final seen = <String>{};
-      final routeMetadata = await _loadRouteMetadataMapFromLocalStore(
-        provider: provider,
-        routeIds: rows
-            .map((row) => row.routeId)
-            .where((id) => id.isNotEmpty)
-            .toSet(),
-      );
-
-      for (final row in rows) {
-        final routeId = row.routeId;
-        final pathId = row.pathId;
-        final stopId = _parseStopId(row.stopId);
-        final stop = StopInfo(
-          routeKey: _routeKeyForRouteId(routeId),
-          pathId: pathId,
-          stopId: stopId,
-          rawStopId: _rawStopIdString(row.stopId),
-          stopName: row.stopName,
-          sequence: row.sequence,
-          lon: row.lon,
-          lat: row.lat,
-        );
-
-        final distance = calculateDistanceMeters(
-          latitude,
-          longitude,
-          stop.lat,
-          stop.lon,
-        );
-        if (distance > radiusMeters) {
-          continue;
-        }
-
-        final dedupeKey = '$routeId:$pathId:${stop.stopId}';
-        if (!seen.add(dedupeKey)) {
-          continue;
-        }
-
-        final routeMetadataEntry = routeMetadata['$routeId:$pathId'];
-        if (routeMetadataEntry == null) {
-          continue;
-        }
-        final route = _routeSummaryFromPathRow(
-          provider: provider,
-          routeId: routeId,
-          routeName: routeMetadataEntry.routeName,
-          routeNameEn: routeMetadataEntry.routeNameEn,
-          pathId: pathId,
-          pathName: routeMetadataEntry.pathName,
-        );
-
-        results.add(
-          NearbyStopResult(route: route, stop: stop, distanceMeters: distance),
-        );
-      }
-
-      results.sort(
-        (left, right) => left.distanceMeters.compareTo(right.distanceMeters),
+        radiusMeters: radiusMeters,
+        candidateLimit: 500,
       );
       return results.take(limit).toList();
     } on DatabaseNotReadyException {
@@ -1268,6 +1606,256 @@ class BusRepository {
         limit: limit,
       );
     }
+  }
+
+  /// Expands every stop-name group represented by [seedResults] without
+  /// changing which groups the original nearby query selected.
+  ///
+  /// Native clients prefer their downloaded city database. Web clients and
+  /// native clients without a ready database resolve one representative stop
+  /// per group through the station endpoint instead. Each group is best effort:
+  /// when expansion fails, the seed rows for that group remain visible.
+  Future<List<NearbyStopResult>> completeNearbyStopGroups({
+    required BusProvider provider,
+    required double latitude,
+    required double longitude,
+    required List<NearbyStopResult> seedResults,
+    double radiusMeters = 500,
+  }) async {
+    if (seedResults.isEmpty) {
+      return const <NearbyStopResult>[];
+    }
+
+    final groupOrder = <String>[];
+    final seedsByName = <String, List<NearbyStopResult>>{};
+    for (final result in seedResults) {
+      final name = result.stop.stopName;
+      if (!seedsByName.containsKey(name)) {
+        groupOrder.add(name);
+        seedsByName[name] = <NearbyStopResult>[];
+      }
+      seedsByName[name]!.add(result);
+    }
+
+    final expandedByName = <String, List<NearbyStopResult>>{};
+    try {
+      final localResults = await _fetchNearbyStopsFromLocal(
+        provider: provider,
+        latitude: latitude,
+        longitude: longitude,
+        radiusMeters: radiusMeters,
+      );
+      for (final result in localResults) {
+        final name = result.stop.stopName;
+        if (seedsByName.containsKey(name)) {
+          expandedByName
+              .putIfAbsent(name, () => <NearbyStopResult>[])
+              .add(result);
+        }
+      }
+    } on DatabaseNotReadyException {
+      // API fallback below completes each group independently.
+    }
+
+    final unresolvedNames = groupOrder
+        .where((name) => expandedByName[name]?.isNotEmpty != true)
+        .toList(growable: false);
+    const stationResolveBatchSize = 4;
+    for (
+      var offset = 0;
+      offset < unresolvedNames.length;
+      offset += stationResolveBatchSize
+    ) {
+      final end = math.min(
+        offset + stationResolveBatchSize,
+        unresolvedNames.length,
+      );
+      final names = unresolvedNames.sublist(offset, end);
+      final resolvedGroups = await Future.wait(
+        names.map((name) async {
+          try {
+            final resolved = await _completeNearbyGroupFromStation(
+              provider: provider,
+              latitude: latitude,
+              longitude: longitude,
+              stopName: name,
+              seeds: seedsByName[name]!,
+            );
+            return MapEntry(name, resolved);
+          } catch (error) {
+            debugPrint('Nearby station expansion failed for $name: $error');
+            return MapEntry(name, const <NearbyStopResult>[]);
+          }
+        }),
+      );
+      for (final entry in resolvedGroups) {
+        if (entry.value.isNotEmpty) {
+          expandedByName[entry.key] = entry.value;
+        }
+      }
+    }
+
+    final completed = <NearbyStopResult>[];
+    for (final name in groupOrder) {
+      final group = expandedByName[name]?.isNotEmpty == true
+          ? expandedByName[name]!
+          : seedsByName[name]!;
+      final seen = <String>{};
+      for (final result in group) {
+        if (seen.add(_nearbyResultIdentity(result))) {
+          completed.add(result);
+        }
+      }
+    }
+    return completed;
+  }
+
+  Future<List<NearbyStopResult>> _fetchNearbyStopsFromLocal({
+    required BusProvider provider,
+    required double latitude,
+    required double longitude,
+    required double radiusMeters,
+    int? candidateLimit,
+  }) async {
+    final latDelta = radiusMeters / 111320;
+    final lonScale = (111320 * math.cos(latitude * math.pi / 180)).abs();
+    final lonDelta = lonScale == 0 ? 180.0 : radiusMeters / lonScale;
+    final rows = await _loadCityStopRows(
+      provider: provider,
+      latitude: latitude,
+      longitude: longitude,
+      latDelta: latDelta,
+      lonDelta: lonDelta,
+      limit: candidateLimit,
+    );
+
+    final results = <NearbyStopResult>[];
+    final seen = <String>{};
+    final routeMetadata = await _loadRouteMetadataMapFromLocalStore(
+      provider: provider,
+      routeIds: rows
+          .map((row) => row.routeId)
+          .where((id) => id.isNotEmpty)
+          .toSet(),
+    );
+
+    for (final row in rows) {
+      final routeId = row.routeId;
+      final pathId = row.pathId;
+      final stopId = _parseStopId(row.stopId);
+      final stop = StopInfo(
+        routeKey: _routeKeyForRouteId(routeId),
+        pathId: pathId,
+        stopId: stopId,
+        rawStopId: _rawStopIdString(row.stopId),
+        stopName: row.stopName,
+        sequence: row.sequence,
+        lon: row.lon,
+        lat: row.lat,
+      );
+
+      final distance = calculateDistanceMeters(
+        latitude,
+        longitude,
+        stop.lat,
+        stop.lon,
+      );
+      if (distance > radiusMeters) {
+        continue;
+      }
+
+      final dedupeKey = '$routeId:$pathId:${stop.stopId}';
+      if (!seen.add(dedupeKey)) {
+        continue;
+      }
+
+      final routeMetadataEntry = routeMetadata['$routeId:$pathId'];
+      if (routeMetadataEntry == null) {
+        continue;
+      }
+      final route = _routeSummaryFromPathRow(
+        provider: provider,
+        routeId: routeId,
+        routeName: routeMetadataEntry.routeName,
+        routeNameEn: routeMetadataEntry.routeNameEn,
+        pathId: pathId,
+        pathName: routeMetadataEntry.pathName,
+      );
+
+      results.add(
+        NearbyStopResult(route: route, stop: stop, distanceMeters: distance),
+      );
+    }
+
+    results.sort(
+      (left, right) => left.distanceMeters.compareTo(right.distanceMeters),
+    );
+    return results;
+  }
+
+  Future<List<NearbyStopResult>> _completeNearbyGroupFromStation({
+    required BusProvider provider,
+    required double latitude,
+    required double longitude,
+    required String stopName,
+    required List<NearbyStopResult> seeds,
+  }) async {
+    String? rawStopId;
+    for (final seed in seeds) {
+      final candidate = seed.stop.rawStopId?.trim();
+      if (candidate != null && candidate.isNotEmpty) {
+        rawStopId = candidate;
+        break;
+      }
+    }
+    if (rawStopId == null) {
+      return const <NearbyStopResult>[];
+    }
+
+    final station = await resolveStation(rawStopId, provider: provider);
+    if (station == null ||
+        _normalizeStopNameForComparison(station.stationName) !=
+            _normalizeStopNameForComparison(stopName)) {
+      return const <NearbyStopResult>[];
+    }
+
+    return station.routes
+        .map((arrival) {
+          final stationStop = arrival.result.matchedStop;
+          final stop = StopInfo(
+            routeKey: stationStop.routeKey,
+            pathId: stationStop.pathId,
+            stopId: stationStop.stopId,
+            rawStopId: stationStop.rawStopId,
+            stopName: stopName,
+            sequence: stationStop.sequence,
+            lon: stationStop.lon,
+            lat: stationStop.lat,
+            sec: stationStop.sec,
+            msg: stationStop.msg,
+            t: stationStop.t,
+            buses: stationStop.buses,
+            etas: stationStop.etas,
+          );
+          return NearbyStopResult(
+            route: arrival.result.route,
+            stop: stop,
+            distanceMeters: calculateDistanceMeters(
+              latitude,
+              longitude,
+              stop.lat,
+              stop.lon,
+            ),
+          );
+        })
+        .toList(growable: false);
+  }
+
+  String _nearbyResultIdentity(NearbyStopResult result) {
+    final stopIdentity = result.stop.rawStopId?.trim().isNotEmpty == true
+        ? result.stop.rawStopId!.trim()
+        : result.stop.stopId.toString();
+    return '${result.route.routeId.trim()}:${result.stop.pathId}:$stopIdentity';
   }
 
   Future<List<NearbyStopResult>> _fetchNearbyStopsFromApi({
@@ -1289,7 +1877,7 @@ class BusRepository {
     if (response.statusCode != 200) {
       return const [];
     }
-    final decoded = jsonDecode(apiResponseText(response)) as List<dynamic>;
+    final decoded = await apiDecodeJsonResponseAsync(response) as List<dynamic>;
     final results = <NearbyStopResult>[];
     for (final item in decoded.whereType<Map>()) {
       final routeId = item['routeid']?.toString() ?? '';
@@ -1573,7 +2161,7 @@ class BusRepository {
     );
   }
 
-  Future<RouteDetailData> _buildRouteDetailFromApi({
+  Future<RouteDetailData> _buildRouteTopologyFromApi({
     required BusProvider provider,
     required String routeId,
     String? routeNameHint,
@@ -1610,35 +2198,6 @@ class BusRepository {
       stopsByPath[pathId] = stops;
     }
 
-    var hasLiveData = true;
-    LiveStopMap liveMap;
-    try {
-      liveMap = await _getLiveStopMap(routeId);
-    } catch (_) {
-      hasLiveData = false;
-      liveMap = const <String, LiveStopPayload>{};
-    }
-
-    if (hasLiveData) {
-      for (final entry in stopsByPath.entries) {
-        entry.value.replaceRange(
-          0,
-          entry.value.length,
-          entry.value.map((stop) {
-            final payload =
-                liveMap[_stopCompositeKey(stop.pathId, stop.stopId)];
-            return stop.copyWith(
-              sec: payload?.sec,
-              msg: payload?.msg,
-              t: payload?.t,
-              buses: payload?.buses ?? const [],
-              etas: payload?.etas ?? const [],
-            );
-          }),
-        );
-      }
-    }
-
     final firstPath = paths.firstOrNull;
     final route = _routeSummaryFromPathRow(
       provider: provider,
@@ -1655,7 +2214,39 @@ class BusRepository {
       route: route,
       paths: paths,
       stopsByPath: stopsByPath,
+      hasLiveData: false,
+    );
+  }
+
+  RouteDetailData _applyLiveStopMap(
+    RouteDetailData topology,
+    LiveStopMap liveMap, {
+    required bool hasLiveData,
+  }) {
+    final stopsByPath = topology.stopsByPath.map((pathId, stops) {
+      return MapEntry(
+        pathId,
+        stops
+            .map((stop) {
+              final payload =
+                  liveMap[_stopCompositeKey(stop.pathId, stop.stopId)];
+              return stop.copyWith(
+                sec: payload?.sec,
+                msg: payload?.msg,
+                t: payload?.t,
+                buses: payload?.buses ?? const [],
+                etas: payload?.etas ?? const [],
+              );
+            })
+            .toList(growable: false),
+      );
+    });
+    return RouteDetailData(
+      route: topology.route,
+      paths: topology.paths,
+      stopsByPath: stopsByPath,
       hasLiveData: hasLiveData,
+      familyRouteIds: topology.familyRouteIds,
     );
   }
 
@@ -1837,7 +2428,7 @@ class BusRepository {
     }
 
     final decoded =
-        jsonDecode(apiResponseText(response)) as Map<String, dynamic>;
+        await apiDecodeJsonResponseAsync(response) as Map<String, dynamic>;
     final version = decoded['version'];
     if (version is num) {
       return version.toInt();
@@ -1917,6 +2508,7 @@ class BusRepository {
       _getLiveStopMap(routeId);
 
   Future<LiveStopMap> _getLiveStopMap(String routeId) async {
+    final generation = _routeDataGeneration;
     final cached = _readFreshCache(_realtimeCache, routeId, _realtimeCacheTtl);
     if (cached != null) {
       return cached;
@@ -1931,7 +2523,9 @@ class BusRepository {
     _realtimeInFlight[routeId] = future;
     try {
       final result = await future;
-      _realtimeCache[routeId] = _TimedValue<LiveStopMap>(result);
+      if (generation == _routeDataGeneration) {
+        _realtimeCache[routeId] = _TimedValue<LiveStopMap>(result);
+      }
       return result;
     } finally {
       if (identical(_realtimeInFlight[routeId], future)) {
@@ -1955,7 +2549,7 @@ class BusRepository {
     }
 
     final decoded =
-        jsonDecode(apiResponseText(response)) as Map<String, dynamic>;
+        await apiDecodeJsonResponseAsync(response) as Map<String, dynamic>;
     final result = <String, LiveStopPayload>{};
 
     for (final rawPath in decoded['paths'] as List<dynamic>? ?? const []) {
@@ -2050,7 +2644,7 @@ class BusRepository {
     if (response.statusCode != 200) {
       throw HttpException('整站路線暫時無法取得 (${response.statusCode})。');
     }
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     if (decoded is! Map) {
       throw const FormatException('Invalid station passby response.');
     }
@@ -2082,6 +2676,8 @@ class BusRepository {
           continue;
         }
         final pathId = _toInt(rawRoute['pathid']);
+        final routeRawStopId =
+            _rawStopIdString(rawRoute['stopid']) ?? rawStopId;
         final routeProvider = busProviderFromString(routeId.substring(0, 3));
         final route = _routeSummaryFromPathRow(
           provider: routeProvider,
@@ -2094,8 +2690,8 @@ class BusRepository {
         final matchedStop = StopInfo(
           routeKey: _routeKeyForRouteId(routeId),
           pathId: pathId,
-          stopId: _parseStopId(rawStopId),
-          rawStopId: rawStopId,
+          stopId: _parseStopId(routeRawStopId),
+          rawStopId: routeRawStopId,
           stopName: stationName,
           sequence: _toInt(rawRoute['seq']),
           lon: _toDouble(side['lon']),
@@ -2177,7 +2773,7 @@ class BusRepository {
     }
 
     final decoded =
-        jsonDecode(apiResponseText(response)) as Map<String, dynamic>;
+        await apiDecodeJsonResponseAsync(response) as Map<String, dynamic>;
 
     final normalizedExpectedName = _normalizeStopNameForComparison(
       expectedStopName,
@@ -2252,9 +2848,9 @@ class BusRepository {
   /// silently de-duplicated.
   ///
   /// Returns a map of routeId -> live-stop-payload map for each route that
-  /// the server was able to resolve.  Results are cached both as a batch
-  /// (keyed by the sorted, joined ID list) and individually so that
-  /// subsequent single-route lookups via [_getLiveStopMap] also benefit.
+  /// the server was able to resolve. Results and in-flight work are shared
+  /// per route with [_getLiveStopMap]; only uncached, idle routes enter a
+  /// new batch, including when callers request overlapping sets of routes.
   Future<BatchLiveStopMap> getBatchLiveStopMaps(List<String> routeIds) async {
     const chunkSize = 25;
     final deduped = <String>[];
@@ -2300,55 +2896,63 @@ class BusRepository {
   Future<BatchLiveStopMap> _getBatchLiveStopMapsChunk(
     List<String> routeIds,
   ) async {
-    // Check per-route caches first; if *every* route is fresh we can skip
-    // the batch HTTP request entirely.
-    final allCached = <String, LiveStopMap>{};
-    var allFresh = true;
-    for (final routeId in routeIds) {
-      final cached = _readFreshCache(
-        _realtimeCache,
-        routeId,
-        _realtimeCacheTtl,
-      );
+    final result = <String, LiveStopMap>{};
+    final missing = <String, Completer<LiveStopMap>>{};
+    final pending = <Future<void>>[];
+    for (final id in routeIds) {
+      final cached = _readFreshCache(_realtimeCache, id, _realtimeCacheTtl);
       if (cached != null) {
-        allCached[routeId] = cached;
-      } else {
-        allFresh = false;
+        result[id] = cached;
+        continue;
       }
+      var future = _realtimeInFlight[id];
+      if (future == null) {
+        final completer = Completer<LiveStopMap>();
+        missing[id] = completer;
+        future = completer.future;
+        _realtimeInFlight[id] = future;
+      }
+      // Attach handlers before starting a batch or waiting on other requests.
+      // An omitted/failed route stays absent; an empty successful map is valid.
+      pending.add(
+        future.then<void>((map) {
+          result[id] = map;
+        }, onError: (Object _) {}),
+      );
     }
-    if (allFresh) {
-      return allCached;
+    if (missing.isNotEmpty) {
+      unawaited(_fillBatchLiveStopMaps(missing, _routeDataGeneration));
     }
+    await Future.wait(pending);
+    return result;
+  }
 
-    final cacheKey = [...routeIds]..sort();
-    final cacheKeyStr = cacheKey.join(',');
-    final batchCached = _readFreshCache(
-      _batchRealtimeCache,
-      cacheKeyStr,
-      _batchRealtimeCacheTtl,
-    );
-    if (batchCached != null) {
-      return batchCached;
-    }
-
-    final inFlight = _batchRealtimeInFlight[cacheKeyStr];
-    if (inFlight != null) {
-      return inFlight;
-    }
-
-    final future = _loadBatchLiveStopMaps(routeIds);
-    _batchRealtimeInFlight[cacheKeyStr] = future;
+  Future<void> _fillBatchLiveStopMaps(
+    Map<String, Completer<LiveStopMap>> missing,
+    int generation,
+  ) async {
     try {
-      final result = await future;
-      _batchRealtimeCache[cacheKeyStr] = _TimedValue(result);
-      // Also populate the per-route cache so single-route lookups benefit.
-      for (final entry in result.entries) {
-        _realtimeCache[entry.key] = _TimedValue<LiveStopMap>(entry.value);
+      final maps = await _loadBatchLiveStopMaps(missing.keys.toList());
+      for (final entry in missing.entries) {
+        final map = maps[entry.key];
+        if (map == null) {
+          entry.value.completeError(HttpException('即時資料暫時無法取得：${entry.key}'));
+        } else {
+          if (generation == _routeDataGeneration) {
+            _realtimeCache[entry.key] = _TimedValue(map);
+          }
+          entry.value.complete(map);
+        }
       }
-      return result;
+    } catch (error, stack) {
+      for (final completer in missing.values) {
+        if (!completer.isCompleted) completer.completeError(error, stack);
+      }
     } finally {
-      if (identical(_batchRealtimeInFlight[cacheKeyStr], future)) {
-        _batchRealtimeInFlight.remove(cacheKeyStr);
+      for (final entry in missing.entries) {
+        if (identical(_realtimeInFlight[entry.key], entry.value.future)) {
+          _realtimeInFlight.remove(entry.key);
+        }
       }
     }
   }
@@ -2367,7 +2971,7 @@ class BusRepository {
     }
 
     final decoded =
-        jsonDecode(apiResponseText(response)) as Map<String, dynamic>;
+        await apiDecodeJsonResponseAsync(response) as Map<String, dynamic>;
     final routesRaw =
         decoded['routes'] as Map<String, dynamic>? ?? const <String, dynamic>{};
 
@@ -2442,7 +3046,7 @@ class BusRepository {
       );
     }
 
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     if (decoded is! Map) {
       throw const FormatException('Route path geometry is invalid.');
     }
@@ -2484,7 +3088,7 @@ class BusRepository {
       throw HttpException('無法取得公車地圖即時資料：$routeId (${response.statusCode})');
     }
 
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     final rawBuses = switch (decoded) {
       List<dynamic> list => list,
       Map<dynamic, dynamic> map when map['buses'] is List<dynamic> =>
@@ -2498,6 +3102,136 @@ class BusRepository {
         .whereType<RouteRealtimeBus>()
         .where((bus) => bus.id.isNotEmpty)
         .toList();
+  }
+
+  /// Every live bus in one city, for the 全公車地圖 screen.
+  ///
+  /// One request per city rather than one per route: the per-route endpoint
+  /// would need hundreds of calls to cover a city and would exhaust the rate
+  /// limit long before it finished.
+  Future<CityBusSnapshot> getCityRealtimeBuses(BusProvider provider) async {
+    final cacheKey = provider.name;
+    final cached = _readFreshCache(
+      _cityBusesCache,
+      cacheKey,
+      _cityBusesCacheTtl,
+    );
+    if (cached != null) {
+      return cached;
+    }
+
+    final inFlight = _cityBusesInFlight[cacheKey];
+    if (inFlight != null) {
+      return inFlight;
+    }
+
+    final future = _loadCityRealtimeBuses(provider);
+    _cityBusesInFlight[cacheKey] = future;
+    try {
+      final snapshot = await future;
+      _cityBusesCache[cacheKey] = _TimedValue<CityBusSnapshot>(snapshot);
+      return snapshot;
+    } finally {
+      if (identical(_cityBusesInFlight[cacheKey], future)) {
+        _cityBusesInFlight.remove(cacheKey);
+      }
+    }
+  }
+
+  Future<CityBusSnapshot> _loadCityRealtimeBuses(BusProvider provider) async {
+    final response = await _client.get(
+      Uri.parse('$_apiBaseUrl/api/v1/cities/${provider.prefix}/buses'),
+      headers: _apiJsonHeaders,
+    );
+    if (response.statusCode == 429) {
+      throw const HttpException(rateLimitedErrorMessage);
+    }
+    if (response.statusCode == 404) {
+      // Either a server that predates this endpoint, or a city it does not
+      // serve. Both mean the same thing to the user.
+      throw CityBusFeedUnavailableException(provider);
+    }
+    if (response.statusCode != 200) {
+      throw HttpException(
+        '無法取得全公車地圖資料：${provider.label} (${response.statusCode})',
+      );
+    }
+
+    final decoded = await apiDecodeJsonResponseAsync(response);
+    if (decoded is! Map) {
+      throw const FormatException('City bus snapshot is invalid.');
+    }
+
+    final routes = <String, CityBusRouteInfo>{};
+    for (final entry in (decoded['routes'] as Map? ?? const {}).entries) {
+      final routeId = entry.key.toString().trim();
+      final value = entry.value;
+      if (routeId.isEmpty || value is! Map) {
+        continue;
+      }
+      routes[routeId] = CityBusRouteInfo(
+        routeId: routeId,
+        name: value['name']?.toString().trim().isNotEmpty == true
+            ? value['name'].toString().trim()
+            : routeId,
+        routeUid: _nonEmptyString(value['route_uid']),
+      );
+    }
+
+    final families = <String, CityBusFamily>{};
+    for (final entry in (decoded['families'] as Map? ?? const {}).entries) {
+      final routeUid = entry.key.toString().trim();
+      final value = entry.value;
+      if (routeUid.isEmpty || value is! Map) {
+        continue;
+      }
+      families[routeUid] = CityBusFamily(
+        routeUid: routeUid,
+        name: value['name']?.toString().trim().isNotEmpty == true
+            ? value['name'].toString().trim()
+            : routeUid,
+        routeIds: (value['routeids'] as List? ?? const [])
+            .map((routeId) => routeId?.toString().trim() ?? '')
+            .where((routeId) => routeId.isNotEmpty)
+            .toList(growable: false),
+        stopsRouteId: _nonEmptyString(value['stops_routeid']),
+        geometryRouteId: _nonEmptyString(value['geometry_routeid']),
+      );
+    }
+
+    final buses = <CityBus>[];
+    for (final raw
+        in (decoded['buses'] as List? ?? const []).whereType<Map>()) {
+      final routeUid = _nonEmptyString(raw['route_uid']);
+      final routeId = _nonEmptyString(raw['routeid']);
+      if (routeUid == null && routeId == null) {
+        continue;
+      }
+      final bus = _parseRouteRealtimeBus(routeId ?? routeUid!, raw);
+      if (bus == null || bus.id.isEmpty) {
+        continue;
+      }
+      buses.add(
+        CityBus(bus: bus, routeUid: routeUid ?? routeId!, routeId: routeId),
+      );
+    }
+
+    final updatedAtSeconds = _nullableInt(decoded['updated_at']);
+    return CityBusSnapshot(
+      provider: provider,
+      buses: buses,
+      routes: routes,
+      families: families,
+      ttlSeconds: _nullableInt(decoded['ttl']) ?? 15,
+      updatedAt: updatedAtSeconds == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(
+              updatedAtSeconds * 1000,
+              isUtc: true,
+            ).toLocal(),
+      stale: decoded['stale'] == true,
+      truncated: decoded['truncated'] == true,
+    );
   }
 
   Future<List<RouteAlert>> fetchRouteAlerts(String routeId) async {
@@ -2543,7 +3277,7 @@ class BusRepository {
     }
 
     final decoded =
-        jsonDecode(apiResponseText(response)) as Map<String, dynamic>;
+        await apiDecodeJsonResponseAsync(response) as Map<String, dynamic>;
     final rawAlerts = decoded['alerts'] as List<dynamic>? ?? const [];
     return rawAlerts
         .whereType<Map<String, dynamic>>()
@@ -2820,6 +3554,7 @@ class BusRepository {
       paths: detail.paths,
       stopsByPath: detail.stopsByPath,
       hasLiveData: detail.hasLiveData,
+      familyRouteIds: detail.familyRouteIds,
     );
   }
 
@@ -2837,6 +3572,27 @@ class BusRepository {
       return null;
     }
     return cached.value;
+  }
+
+  void _clearStaticRouteCaches(BusProvider provider) {
+    _staticRouteCacheGeneration[provider] =
+        (_staticRouteCacheGeneration[provider] ?? 0) + 1;
+    final prefix = '${provider.name}:';
+    _routeTopologyCache.removeWhere((key, _) => key.startsWith(prefix));
+    _routeTopologyInFlight.removeWhere((key, _) => key.startsWith(prefix));
+    _routeFamilyCache.removeWhere((key, _) => key.startsWith(prefix));
+    _routeFamilyInFlight.removeWhere((key, _) => key.startsWith(prefix));
+  }
+
+  void _clearAllStaticRouteCaches() {
+    for (final provider in BusProvider.values) {
+      _staticRouteCacheGeneration[provider] =
+          (_staticRouteCacheGeneration[provider] ?? 0) + 1;
+    }
+    _routeTopologyCache.clear();
+    _routeTopologyInFlight.clear();
+    _routeFamilyCache.clear();
+    _routeFamilyInFlight.clear();
   }
 
   Future<Database> _openCityDatabase(BusProvider provider) async {
@@ -2873,7 +3629,7 @@ class BusRepository {
     }
 
     if (!await _looksLikeSqliteFile(file)) {
-      await _deleteDatabaseArtifacts(file);
+      await _markMetadataDatabaseInvalid(file);
       throw DatabaseNotReadyException('路線資料庫已損壞，請重新下載。');
     }
 
@@ -2886,7 +3642,7 @@ class BusRepository {
       await _validateMetadataDatabaseSchema(database);
       return database;
     } catch (_) {
-      await _deleteDatabaseArtifacts(file);
+      await _markMetadataDatabaseInvalid(file);
       throw DatabaseNotReadyException('路線資料庫無法開啓，請重新下載。');
     }
   }
@@ -2975,6 +3731,7 @@ class BusRepository {
   }
 
   Future<void> _markDatabaseInvalid(BusProvider provider, File file) async {
+    invalidateRouteData();
     for (final candidatePath in <String>[
       file.path,
       '${file.path}-wal',
@@ -2992,6 +3749,11 @@ class BusRepository {
       versions[provider.name] = 0;
       await _writeVersionMap(versions);
     }
+  }
+
+  Future<void> _markMetadataDatabaseInvalid(File file) async {
+    invalidateRouteData();
+    await _deleteDatabaseArtifacts(file);
   }
 
   // ignore: unused_element
@@ -3583,7 +4345,7 @@ class BusRepository {
         await cityFile.rename(previousCityFile.path);
         cityBackedUp = true;
       }
-      await _deleteDatabaseArtifacts(metadataFile);
+      await _markMetadataDatabaseInvalid(metadataFile);
       await _deleteDatabaseArtifacts(cityFile);
 
       await tempMetadataFile.rename(metadataFile.path);
@@ -3592,7 +4354,7 @@ class BusRepository {
       cityInstalled = true;
     } catch (_) {
       if (metadataInstalled) {
-        await _deleteDatabaseArtifacts(metadataFile);
+        await _markMetadataDatabaseInvalid(metadataFile);
       }
       if (cityInstalled) {
         await _deleteDatabaseArtifacts(cityFile);
@@ -3746,6 +4508,12 @@ class BusRepository {
     return null;
   }
 
+  /// The stable client-side key for a routeid.
+  ///
+  /// Route detail is addressed by [routeKey], but anything that arrives from
+  /// the network carries a routeid, so callers need a way to cross over.
+  int routeKeyForRouteId(String routeId) => _routeKeyForRouteId(routeId);
+
   int _routeKeyForRouteId(String routeId) {
     const offset = 0x811c9dc5;
     const prime = 0x01000193;
@@ -3870,7 +4638,7 @@ class BusRepository {
       throw Exception('Failed to fetch operators: ${response.statusCode}');
     }
     final List<dynamic> jsonList =
-        jsonDecode(apiResponseText(response)) as List<dynamic>;
+        await apiDecodeJsonResponseAsync(response) as List<dynamic>;
     final operators = jsonList
         .map((e) => RouteOperator.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -3898,7 +4666,7 @@ class BusRepository {
       throw Exception('Failed to fetch schedule: ${response.statusCode}');
     }
     final List<dynamic> jsonList =
-        jsonDecode(apiResponseText(response)) as List<dynamic>;
+        await apiDecodeJsonResponseAsync(response) as List<dynamic>;
     final entries = jsonList
         .map((e) => RouteScheduleEntry.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -3937,7 +4705,7 @@ class BusRepository {
         return fetchRouteSchedule(routeId);
       }
       final decoded =
-          jsonDecode(apiResponseText(response)) as Map<String, dynamic>;
+          await apiDecodeJsonResponseAsync(response) as Map<String, dynamic>;
       final List<dynamic> jsonList =
           decoded['entries'] as List<dynamic>? ?? const [];
       final entries = jsonList
@@ -4052,7 +4820,7 @@ class BusRepository {
     if (response.statusCode != 200) {
       throw HttpException('取消發車資料暫時無法取得 (${response.statusCode})。');
     }
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     if (decoded is! Map) {
       throw const FormatException('Taichung route index is invalid.');
     }
@@ -4159,7 +4927,7 @@ class BusRepository {
     if (response.statusCode != 200) {
       throw HttpException('取消發車資料暫時無法取得 (${response.statusCode})。');
     }
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     if (decoded is! List) {
       throw const FormatException('Taichung current schedule is invalid.');
     }
@@ -4176,7 +4944,7 @@ class BusRepository {
     if (response.statusCode != 200) {
       throw HttpException('取消發車資料暫時無法取得 (${response.statusCode})。');
     }
-    final decoded = jsonDecode(apiResponseText(response));
+    final decoded = await apiDecodeJsonResponseAsync(response);
     if (decoded is! Map || decoded['data'] is! Map) {
       throw const FormatException('Taichung GraphQL response is invalid.');
     }
@@ -4259,7 +5027,7 @@ class BusRepository {
         return const <String, bool>{};
       }
       final decoded =
-          jsonDecode(apiResponseText(response)) as Map<String, dynamic>;
+          await apiDecodeJsonResponseAsync(response) as Map<String, dynamic>;
       final list = decoded['holidays'] as List<dynamic>? ?? const [];
       final result = <String, bool>{};
       for (final item in list) {
@@ -4348,6 +5116,13 @@ class _CityStopRow {
   final int sequence;
   final double lon;
   final double lat;
+}
+
+class _LiveStopResult {
+  const _LiveStopResult({required this.liveMap, required this.hasLiveData});
+
+  final LiveStopMap liveMap;
+  final bool hasLiveData;
 }
 
 class _TimedValue<T> {

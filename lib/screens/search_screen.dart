@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../app/bus_app.dart';
+import '../core/app_motion.dart';
+import '../widgets/app_content_transition.dart';
 import '../core/app_controller.dart';
 import '../core/friendly_error.dart';
 import '../core/haptic_feedback_service.dart';
@@ -34,6 +36,9 @@ class _SearchScreenState extends State<SearchScreen> {
   BusProvider? _webPreferredProvider;
   Position? _lastResolvedSearchPosition;
   int _activeSearchToken = 0;
+  int _routeNameLoadToken = 0;
+  String? _loadedRouteNameProviders;
+  Set<String> _availableRouteNames = const <String>{};
   late bool _isRouteKeypadVisible;
   bool _isUsingNativeKeyboard = false;
 
@@ -50,6 +55,40 @@ class _SearchScreenState extends State<SearchScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(_resolveWebPreferredProvider());
       });
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_supportsRouteKeypad) {
+      return;
+    }
+    final controller = AppControllerScope.of(context);
+    final providers = controller.downloadedProviders;
+    final providerKey = providers.map((provider) => provider.name).join('|');
+    if (_loadedRouteNameProviders == providerKey) {
+      return;
+    }
+    _loadedRouteNameProviders = providerKey;
+    final token = ++_routeNameLoadToken;
+    unawaited(_loadAvailableRouteNames(controller, token));
+  }
+
+  Future<void> _loadAvailableRouteNames(
+    AppController controller,
+    int token,
+  ) async {
+    try {
+      final routeNames = await controller.routeNamesForDownloadedProviders();
+      if (!mounted || token != _routeNameLoadToken) {
+        return;
+      }
+      setState(() => _availableRouteNames = routeNames);
+    } catch (_) {
+      if (mounted && token == _routeNameLoadToken) {
+        setState(() => _availableRouteNames = const <String>{});
+      }
     }
   }
 
@@ -1047,23 +1086,46 @@ class _SearchScreenState extends State<SearchScreen> {
   }) async {
     unawaited(AppHaptics.selectionClick());
     final busController = AppControllerScope.read(context);
-    if (saveHistory && route != null) {
-      await busController.addHistoryEntry(route, provider: provider);
-    }
-    final autoFavorited = await busController.recordRouteSelection(
-      provider: provider,
-      routeKey: routeKey,
-      routeName: routeName,
-      source: source,
-      pathId: initialPathId,
-      stopId: initialStopId,
-    );
-    if (!mounted) {
-      return;
-    }
-    if (autoFavorited != null) {
-      showAutoFavoritedSnackBar(context, autoFavorited);
-    }
+    final initialTopologyFuture = busController
+        .getRouteTopology(
+          routeKey,
+          provider: provider,
+          routeIdHint: routeIdHint,
+          routeNameHint: routeName,
+        )
+        .then<RouteDetailData?>((detail) => detail)
+        .catchError((_) => null);
+    final normalizedRouteId = routeIdHint?.trim() ?? '';
+    final initialAlertsFuture = normalizedRouteId.isEmpty
+        ? null
+        : busController
+              .getRouteAlerts(normalizedRouteId)
+              .catchError((_) => const <RouteAlert>[]);
+    final initialCancelledDeparturesFuture = provider != BusProvider.txg
+        ? null
+        : busController.repository
+              .fetchTaichungCancelledDepartures(
+                routeId: normalizedRouteId,
+                routeName: routeName,
+                date: DateTime.now(),
+              )
+              .catchError((_) => const <CancelledDeparture>[]);
+    unawaited(() async {
+      if (saveHistory && route != null) {
+        await busController.addHistoryEntry(route, provider: provider);
+      }
+      final autoFavorited = await busController.recordRouteSelection(
+        provider: provider,
+        routeKey: routeKey,
+        routeName: routeName,
+        source: source,
+        pathId: initialPathId,
+        stopId: initialStopId,
+      );
+      if (mounted && autoFavorited != null) {
+        showAutoFavoritedSnackBar(context, autoFavorited);
+      }
+    }());
     await openRouteDetailPage(
       context,
       routeKey: routeKey,
@@ -1074,7 +1136,78 @@ class _SearchScreenState extends State<SearchScreen> {
       initialStopId: initialStopId,
       initialDestinationPathId: initialDestinationPathId,
       initialDestinationStopId: initialDestinationStopId,
+      initialTopologyFuture: initialTopologyFuture,
+      initialAlertsFuture: initialAlertsFuture,
+      initialCancelledDeparturesFuture: initialCancelledDeparturesFuture,
       suppressAutoDestinationSelection: suppressAutoDestinationSelection,
+    );
+  }
+
+  Widget _buildRouteResultCard(
+    _SearchDisplayItem item,
+    AppController busController,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Card(child: _buildRouteResultTile(item, busController)),
+    );
+  }
+
+  Widget _buildRouteResultTile(
+    _SearchDisplayItem item,
+    AppController busController,
+  ) {
+    return ListTile(
+      leading: CircleAvatar(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              item.route.routeName.trim().isEmpty
+                  ? '?'
+                  : item.route.routeName.characters.take(4).toString(),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ),
+      ),
+      title: item.stopSearch?.matchedStop.stopName != null
+          ? Text(
+              '${item.stopSearch!.matchedStop.stopName} (${item.route.routeName})',
+            )
+          : Text(item.route.routeName),
+      subtitle: Text(
+        _subtitleForResult(item),
+        maxLines: item.isStopSearchResult ? 3 : 1,
+      ),
+      onTap: () async {
+        final route = item.route;
+        final stopSearch = item.stopSearch;
+        final routeProvider = busProviderFromString(route.sourceProvider);
+        final resolvedStopSearchLaunch = stopSearch == null
+            ? null
+            : await _resolveStopSearchLaunch(stopSearch, busController);
+        await _openRoute(
+          provider: routeProvider,
+          routeKey: route.routeKey,
+          routeName: route.routeName,
+          routeIdHint: route.routeId,
+          initialPathId:
+              resolvedStopSearchLaunch?.pathId ??
+              stopSearch?.matchedStop.pathId ??
+              route.rtrip,
+          initialStopId: resolvedStopSearchLaunch?.stopId,
+          initialDestinationPathId: resolvedStopSearchLaunch?.destinationPathId,
+          initialDestinationStopId: resolvedStopSearchLaunch?.destinationStopId,
+          suppressAutoDestinationSelection:
+              resolvedStopSearchLaunch?.suppressAutoDestinationSelection ??
+              false,
+          route: route,
+          saveHistory: true,
+          source: stopSearch == null ? 'search_result' : 'search_stop_result',
+        );
+      },
     );
   }
 
@@ -1089,6 +1222,15 @@ class _SearchScreenState extends State<SearchScreen> {
     final missingProviders = selectedProviders
         .where((provider) => !busController.isDatabaseReady(provider))
         .toList();
+    final resultState = _controller.text.trim().isEmpty
+        ? 'history'
+        : _isLoading
+        ? 'loading'
+        : _error != null
+        ? 'error'
+        : _results.isEmpty
+        ? 'empty'
+        : 'results';
 
     return BackgroundImageWrapper(
       pageKey: 'search',
@@ -1098,161 +1240,115 @@ class _SearchScreenState extends State<SearchScreen> {
         body: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 680),
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+            child: Column(
               children: [
-                TextField(
-                  controller: _controller,
-                  focusNode: _searchFocusNode,
-                  onChanged: _onQueryChanged,
-                  onTap: _onSearchFieldTap,
-                  readOnly: _supportsRouteKeypad && !_isUsingNativeKeyboard,
-                  showCursor: true,
-                  textInputAction: TextInputAction.search,
-                  onSubmitted: _submitNativeSearch,
-                  decoration: InputDecoration(
-                    prefixIcon: const Icon(Icons.search_rounded),
-                    hintText: '搜尋公車路線或站牌名稱',
-                    suffixIcon: _buildSearchSuffix(),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+                  child: TextField(
+                    controller: _controller,
+                    focusNode: _searchFocusNode,
+                    onChanged: _onQueryChanged,
+                    onTap: _onSearchFieldTap,
+                    readOnly: _supportsRouteKeypad && !_isUsingNativeKeyboard,
+                    showCursor: true,
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: _submitNativeSearch,
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      hintText: '搜尋公車路線或站牌名稱',
+                      suffixIcon: _buildSearchSuffix(),
+                    ),
                   ),
                 ),
-                const SizedBox(height: 16),
                 if (_isResolvingStopDistances) ...[
                   const LinearProgressIndicator(),
                   const SizedBox(height: 12),
                 ],
-                if (_controller.text.trim().isEmpty)
-                  _HistorySection(
-                    history: busController.history,
-                    onClear: busController.clearHistory,
-                    onSelect: (entry) {
-                      unawaited(
-                        _openRoute(
-                          provider: entry.provider,
-                          routeKey: entry.routeKey,
-                          routeName: entry.routeName,
-                          routeIdHint: entry.routeId,
-                          source: 'search_history',
-                        ),
-                      );
-                    },
-                  )
-                else if (_isLoading)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 40),
-                    child: Center(child: CircularProgressIndicator()),
-                  )
-                else if (_error != null)
-                  CatStateCard(
-                    mood: CatStateMood.cry,
-                    title: '搜尋撞到貓貓了',
-                    message: _error,
-                  )
-                else if (_isResolvingStopDistances && _results.isEmpty)
-                  const CatStateCard(
-                    mood: CatStateMood.laugh,
-                    title: '貓貓正在翻站牌',
-                    message: '正在搜尋附近可搭的站牌...',
-                  )
-                else if (_results.isEmpty)
-                  CatStateCard(
-                    mood: CatStateMood.sad,
-                    title: '沒有找到這台貓公車',
-                    message: missingProviders.isEmpty
-                        ? '試試看少打一點，或換成站牌名稱搜尋。'
-                        : '部分站牌搜尋需要本機資料庫，先更新資料庫後再試一次。',
-                  )
-                else
-                  ..._results.map(
-                    (item) => Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Card(
-                        child: ListTile(
-                          leading: CircleAvatar(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 4,
-                              ),
-                              child: FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text(
-                                  item.route.routeName.trim().isEmpty
-                                      ? '?'
-                                      : item.route.routeName.characters
-                                            .take(4)
-                                            .toString(),
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                Expanded(
+                  child: AppContentTransition(
+                    state: resultState,
+                    child: resultState == 'results'
+                        ? ListView.builder(
+                            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                            itemCount: _results.length,
+                            itemBuilder: (context, index) =>
+                                _buildRouteResultCard(
+                                  _results[index],
+                                  busController,
                                 ),
-                              ),
-                            ),
-                          ),
-                          title: item.stopSearch?.matchedStop.stopName != null
-                              ? Text(
-                                  "${item.stopSearch!.matchedStop.stopName} (${item.route.routeName})",
+                          )
+                        : ListView(
+                            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                            children: [
+                              if (resultState == 'history')
+                                _HistorySection(
+                                  history: busController.history,
+                                  onClear: busController.clearHistory,
+                                  onSelect: (entry) {
+                                    unawaited(
+                                      _openRoute(
+                                        provider: entry.provider,
+                                        routeKey: entry.routeKey,
+                                        routeName: entry.routeName,
+                                        routeIdHint: entry.routeId,
+                                        source: 'search_history',
+                                      ),
+                                    );
+                                  },
                                 )
-                              : Text(item.route.routeName),
-                          subtitle: Text(
-                            _subtitleForResult(item),
-                            maxLines: item.isStopSearchResult ? 3 : 1,
+                              else if (_isLoading)
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 40),
+                                  child: Center(
+                                    child: CircularProgressIndicator(),
+                                  ),
+                                )
+                              else if (_error != null)
+                                CatStateCard(
+                                  mood: CatStateMood.cry,
+                                  title: '搜尋撞到貓貓了',
+                                  message: _error,
+                                )
+                              else if (_isResolvingStopDistances &&
+                                  _results.isEmpty)
+                                const CatStateCard(
+                                  mood: CatStateMood.laugh,
+                                  title: '貓貓正在翻站牌',
+                                  message: '正在搜尋附近可搭的站牌...',
+                                )
+                              else if (_results.isEmpty)
+                                CatStateCard(
+                                  mood: CatStateMood.sad,
+                                  title: '沒有找到這台貓公車',
+                                  message: missingProviders.isEmpty
+                                      ? '試試看少打一點，或換成站牌名稱搜尋。'
+                                      : '部分站牌搜尋需要本機資料庫，先更新資料庫後再試一次。',
+                                ),
+                            ],
                           ),
-                          onTap: () async {
-                            final route = item.route;
-                            final stopSearch = item.stopSearch;
-                            final routeProvider = busProviderFromString(
-                              route.sourceProvider,
-                            );
-                            final resolvedStopSearchLaunch = stopSearch == null
-                                ? null
-                                : await _resolveStopSearchLaunch(
-                                    stopSearch,
-                                    busController,
-                                  );
-                            await _openRoute(
-                              provider: routeProvider,
-                              routeKey: route.routeKey,
-                              routeName: route.routeName,
-                              routeIdHint: route.routeId,
-                              initialPathId:
-                                  resolvedStopSearchLaunch?.pathId ??
-                                  stopSearch?.matchedStop.pathId ??
-                                  route.rtrip,
-                              initialStopId: resolvedStopSearchLaunch?.stopId,
-                              initialDestinationPathId:
-                                  resolvedStopSearchLaunch?.destinationPathId,
-                              initialDestinationStopId:
-                                  resolvedStopSearchLaunch?.destinationStopId,
-                              suppressAutoDestinationSelection:
-                                  resolvedStopSearchLaunch
-                                      ?.suppressAutoDestinationSelection ??
-                                  false,
-                              route: route,
-                              saveHistory: true,
-                              source: stopSearch == null
-                                  ? 'search_result'
-                                  : 'search_stop_result',
-                            );
-                          },
-                        ),
-                      ),
-                    ),
                   ),
+                ),
               ],
             ),
           ),
         ),
-        bottomNavigationBar:
-            _supportsRouteKeypad &&
-                _isRouteKeypadVisible &&
-                !_isUsingNativeKeyboard
-            ? RouteSearchKeypad(
-                controller: _controller,
-                onChanged: _onQueryChanged,
-                onRequestTextInput: _requestNativeKeyboard,
-                onCollapse: _collapseRouteKeypad,
-              )
-            : null,
+        bottomNavigationBar: AnimatedSize(
+          duration: AppMotion.duration(context),
+          curve: AppMotion.curve,
+          alignment: Alignment.bottomCenter,
+          child:
+              _supportsRouteKeypad &&
+                  _isRouteKeypadVisible &&
+                  !_isUsingNativeKeyboard
+              ? RouteSearchKeypad(
+                  controller: _controller,
+                  onChanged: _onQueryChanged,
+                  onRequestTextInput: _requestNativeKeyboard,
+                  onCollapse: _collapseRouteKeypad,
+                  availableRouteNames: _availableRouteNames,
+                )
+              : const SizedBox.shrink(),
+        ),
       ),
     );
   }

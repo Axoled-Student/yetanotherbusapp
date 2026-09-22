@@ -1,18 +1,21 @@
 import 'package:flutter/material.dart';
 
 import '../core/models.dart';
+import '../core/app_motion.dart';
 
 class EtaBadge extends StatelessWidget {
   const EtaBadge({
     required this.stop,
     required this.alwaysShowSeconds,
     this.size = 58,
+    this.isLoading = false,
     super.key,
   });
 
   final StopInfo stop;
   final bool alwaysShowSeconds;
   final double size;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
@@ -25,24 +28,36 @@ class EtaBadge extends StatelessWidget {
     );
     final fontSize = size * 0.24;
 
-    return Container(
+    return AnimatedContainer(
+      duration: AppMotion.duration(context),
+      curve: AppMotion.curve,
       width: size,
       height: size,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: eta.backgroundColor,
+        color: isLoading
+            ? theme.colorScheme.surfaceContainerHighest
+            : eta.backgroundColor,
         borderRadius: BorderRadius.circular(size * 0.31),
       ),
-      child: Text(
-        eta.text,
-        textAlign: TextAlign.center,
-        softWrap: true,
-        maxLines: 2,
-        style: TextStyle(
-          color: eta.foregroundColor,
-          fontWeight: FontWeight.w700,
-          fontSize: fontSize,
-          height: 1.1,
+      child: AnimatedSwitcher(
+        duration: AppMotion.duration(context),
+        switchInCurve: AppMotion.curve,
+        switchOutCurve: AppMotion.curve,
+        child: Text(
+          key: ValueKey((isLoading, isLoading ? '載入中' : eta.text)),
+          isLoading ? '載入中' : eta.text,
+          textAlign: TextAlign.center,
+          softWrap: true,
+          maxLines: 2,
+          style: TextStyle(
+            color: isLoading
+                ? theme.colorScheme.onSurfaceVariant
+                : eta.foregroundColor,
+            fontWeight: FontWeight.w700,
+            fontSize: fontSize,
+            height: 1.1,
+          ),
         ),
       ),
     );
@@ -56,12 +71,14 @@ class GenericEtaBadge extends StatelessWidget {
     required this.seconds,
     this.message,
     this.size = 58,
+    this.darkBackground = false,
     super.key,
   });
 
   final int? seconds;
   final String? message;
   final double size;
+  final bool darkBackground;
 
   @override
   Widget build(BuildContext context) {
@@ -73,29 +90,49 @@ class GenericEtaBadge extends StatelessWidget {
       colorScheme: theme.colorScheme,
     );
     final fontSize = size * 0.24;
+    final backgroundColor = darkBackground
+        ? _darkenEtaColor(eta.backgroundColor)
+        : eta.backgroundColor;
 
-    return Container(
+    return AnimatedContainer(
+      duration: AppMotion.duration(context),
+      curve: AppMotion.curve,
       width: size,
       height: size,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: eta.backgroundColor,
+        color: backgroundColor,
         borderRadius: BorderRadius.circular(size * 0.31),
       ),
-      child: Text(
-        eta.text,
-        textAlign: TextAlign.center,
-        softWrap: true,
-        maxLines: 2,
-        style: TextStyle(
-          color: eta.foregroundColor,
-          fontWeight: FontWeight.w700,
-          fontSize: fontSize,
-          height: 1.1,
+      child: AnimatedSwitcher(
+        duration: AppMotion.duration(context),
+        switchInCurve: AppMotion.curve,
+        switchOutCurve: AppMotion.curve,
+        child: Text(
+          eta.text,
+          key: ValueKey(eta.text),
+          textAlign: TextAlign.center,
+          softWrap: true,
+          maxLines: 2,
+          style: TextStyle(
+            color: darkBackground ? Colors.white : eta.foregroundColor,
+            fontWeight: FontWeight.w700,
+            fontSize: fontSize,
+            height: 1.1,
+          ),
         ),
       ),
     );
   }
+}
+
+Color _darkenEtaColor(Color color) {
+  final hsl = HSLColor.fromColor(color);
+  const maximumLightness = 0.32;
+  if (hsl.lightness <= maximumLightness) {
+    return color;
+  }
+  return hsl.withLightness(maximumLightness).toColor();
 }
 
 /// Build ETA presentation from raw seconds.

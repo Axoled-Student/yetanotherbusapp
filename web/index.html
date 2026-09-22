@@ -31,6 +31,15 @@
 
   <title>YABus</title>
   <link rel="manifest" href="manifest.json">
+  <!-- Material Icons are used on the first screen; route-specific fonts load on demand. -->
+  <link rel="preload" href="assets/fonts/MaterialIcons-Regular.otf" as="font" type="font/otf" crossorigin>
+  <style>
+    @font-face {
+      font-family: "MaterialIcons";
+      src: url("assets/fonts/MaterialIcons-Regular.otf") format("opentype");
+      font-display: block;
+    }
+  </style>
   <style id="splash-screen-style">
     html {
       height: 100%

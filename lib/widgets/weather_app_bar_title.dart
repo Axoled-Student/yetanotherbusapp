@@ -21,7 +21,10 @@ const double kWeatherChipHPad = 4;
 
 /// Width the weather chip needs for a temperature label of [labelWidth].
 double weatherChipWidth(double labelWidth) =>
-    kWeatherChipIconSize + kWeatherChipIconGap + labelWidth + kWeatherChipHPad * 2;
+    kWeatherChipIconSize +
+    kWeatherChipIconGap +
+    labelWidth +
+    kWeatherChipHPad * 2;
 
 /// Whether title plus chip still fit inside the app bar's title slot.
 bool weatherChipFits({
@@ -138,6 +141,8 @@ Future<Position?> resolvePassivePosition() async {
 class WeatherAppBarTitle extends StatelessWidget {
   const WeatherAppBarTitle({
     required this.title,
+    this.titleWidget,
+    this.titleWidth,
     this.onTap,
     this.serviceOverride,
     this.locationOverride,
@@ -145,6 +150,12 @@ class WeatherAppBarTitle extends StatelessWidget {
   });
 
   final String title;
+
+  /// Optional branded title shown instead of plain text.
+  final Widget? titleWidget;
+
+  /// Rendered width of [titleWidget], used to decide whether the weather chip fits.
+  final double? titleWidth;
 
   /// Tapping the chip opens the full weather page. Null leaves it decorative.
   final WeatherChipTapCallback? onTap;
@@ -159,10 +170,12 @@ class WeatherAppBarTitle extends StatelessWidget {
   Widget build(BuildContext context) {
     final controller = AppControllerScope.of(context);
     if (!controller.settings.showWeatherInAppBar) {
-      return Text(title);
+      return titleWidget ?? Text(title);
     }
     return _WeatherChipHost(
       title: title,
+      titleWidget: titleWidget,
+      titleWidth: titleWidth,
       onTap: onTap,
       serviceOverride: serviceOverride,
       locationOverride: locationOverride,
@@ -173,12 +186,16 @@ class WeatherAppBarTitle extends StatelessWidget {
 class _WeatherChipHost extends StatefulWidget {
   const _WeatherChipHost({
     required this.title,
+    this.titleWidget,
+    this.titleWidth,
     this.onTap,
     this.serviceOverride,
     this.locationOverride,
   });
 
   final String title;
+  final Widget? titleWidget;
+  final double? titleWidth;
   final WeatherChipTapCallback? onTap;
   final WeatherService? serviceOverride;
   final PassiveLocationResolver? locationOverride;
@@ -253,7 +270,7 @@ class _WeatherChipHostState extends State<_WeatherChipHost>
   Widget build(BuildContext context) {
     final snapshot = _snapshot;
     if (snapshot == null) {
-      return Text(widget.title);
+      return widget.titleWidget ?? Text(widget.title);
     }
 
     final baseStyle = DefaultTextStyle.of(context).style;
@@ -265,12 +282,9 @@ class _WeatherChipHostState extends State<_WeatherChipHost>
     final textDirection = Directionality.of(context);
     final label = '${snapshot.displayTemperature}°C';
 
-    final titleWidth = _measure(
-      widget.title,
-      baseStyle,
-      textScaler,
-      textDirection,
-    );
+    final titleWidth =
+        widget.titleWidth ??
+        _measure(widget.title, baseStyle, textScaler, textDirection);
     final chipWidth = weatherChipWidth(
       _measure(label, chipStyle, textScaler, textDirection),
     );
@@ -303,7 +317,8 @@ class _WeatherChipHostState extends State<_WeatherChipHost>
 
     final chip = Semantics(
       button: onTap != null,
-      label: '目前天氣 ${weatherConditionLabel(snapshot.condition)}'
+      label:
+          '目前天氣 ${weatherConditionLabel(snapshot.condition)}'
           ' ${snapshot.displayTemperature} 度',
       child: Tooltip(
         message: onTap == null
@@ -330,23 +345,26 @@ class _WeatherChipHostState extends State<_WeatherChipHost>
               chipWidth: chipWidth,
             );
         if (!fits) {
-          return Text(
-            widget.title,
-            maxLines: 1,
-            softWrap: false,
-            overflow: TextOverflow.ellipsis,
-          );
+          return widget.titleWidget ??
+              Text(
+                widget.title,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+              );
         }
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Flexible(
-              child: Text(
-                widget.title,
-                maxLines: 1,
-                softWrap: false,
-                overflow: TextOverflow.ellipsis,
-              ),
+              child:
+                  widget.titleWidget ??
+                  Text(
+                    widget.title,
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.ellipsis,
+                  ),
             ),
             const SizedBox(width: kWeatherChipGap),
             ConstrainedBox(

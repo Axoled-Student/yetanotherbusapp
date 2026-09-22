@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../app/bus_app.dart';
+import '../widgets/app_content_transition.dart';
 import '../core/bus_repository.dart';
 import '../core/friendly_error.dart';
 import '../core/models.dart';
 import '../core/route_direction_label.dart';
+import '../core/user_location.dart';
 import 'adaptive_settings_presenter.dart';
 import '../widgets/background_image_wrapper.dart';
 import '../widgets/eta_badge.dart';
@@ -35,9 +37,11 @@ class _NearbyStopGroup {
 class _NearbyScreenState extends State<NearbyScreen> {
   bool _loading = true;
   String? _error;
+  LocationFailure? _locationFailure;
   List<NearbyStopResult> _results = const [];
   Map<String, LiveStopMap> _liveMaps = const {};
   bool _loadingEtas = false;
+  int _requestGeneration = 0;
 
   @override
   void initState() {
@@ -48,53 +52,51 @@ class _NearbyScreenState extends State<NearbyScreen> {
   }
 
   Future<void> _loadNearbyStops() async {
+    final requestGeneration = ++_requestGeneration;
     final controller = AppControllerScope.read(context);
     setState(() {
       _loading = true;
       _error = null;
+      _locationFailure = null;
       _liveMaps = const {};
+      _loadingEtas = false;
     });
 
     try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        throw StateError('定位服務尚未開啓。');
-      }
-
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        throw StateError('沒有取得定位權限。');
-      }
-
-      final position = await Geolocator.getCurrentPosition();
+      final position = await resolveUserPosition();
       final results = await controller.getNearbyStops(
         latitude: position.latitude,
         longitude: position.longitude,
       );
 
-      if (!mounted) {
+      if (!mounted || requestGeneration != _requestGeneration) {
         return;
       }
       setState(() {
         _results = results;
       });
 
-      // Phase 2: load ETAs in background without blocking the list render.
-      unawaited(_loadEtas(results));
+      // Phase 2: fill every visible stop group, then load any ETAs that were
+      // not already embedded by the station endpoint. Neither blocks the seed
+      // rows from rendering.
+      unawaited(
+        _completeNearbyStops(
+          position: position,
+          seedResults: results,
+          requestGeneration: requestGeneration,
+        ),
+      );
     } catch (error) {
-      if (!mounted) {
+      if (!mounted || requestGeneration != _requestGeneration) {
         return;
       }
       setState(() {
         _results = const [];
         _error = friendlyErrorMessage(error);
+        _locationFailure = error is LocationFailure ? error : null;
       });
     } finally {
-      if (mounted) {
+      if (mounted && requestGeneration == _requestGeneration) {
         setState(() {
           _loading = false;
         });
@@ -102,18 +104,68 @@ class _NearbyScreenState extends State<NearbyScreen> {
     }
   }
 
-  Future<void> _loadEtas(List<NearbyStopResult> results) async {
-    if (results.isEmpty || !mounted) {
+  Future<void> _completeNearbyStops({
+    required Position position,
+    required List<NearbyStopResult> seedResults,
+    required int requestGeneration,
+  }) async {
+    if (seedResults.isEmpty ||
+        !mounted ||
+        requestGeneration != _requestGeneration) {
       return;
     }
 
     final controller = AppControllerScope.read(context);
     setState(() => _loadingEtas = true);
 
+    var completedResults = seedResults;
+    try {
+      completedResults = await controller.completeNearbyStopGroups(
+        latitude: position.latitude,
+        longitude: position.longitude,
+        seedResults: seedResults,
+      );
+    } catch (_) {
+      // Group completion is an enhancement. Keep the seed list usable when a
+      // downloaded database or station lookup becomes unavailable.
+    }
+
+    if (!mounted || requestGeneration != _requestGeneration) {
+      return;
+    }
+    setState(() {
+      _results = completedResults;
+    });
+    await _loadEtas(completedResults, requestGeneration: requestGeneration);
+  }
+
+  bool _hasEmbeddedLiveData(StopInfo stop) {
+    return stop.sec != null ||
+        (stop.msg?.trim().isNotEmpty ?? false) ||
+        (stop.t?.trim().isNotEmpty ?? false) ||
+        stop.buses.isNotEmpty ||
+        stop.etas.isNotEmpty;
+  }
+
+  Future<void> _loadEtas(
+    List<NearbyStopResult> results, {
+    required int requestGeneration,
+  }) async {
+    if (!mounted || requestGeneration != _requestGeneration) {
+      return;
+    }
+
+    final controller = AppControllerScope.read(context);
+
     final routeIds = results
+        .where((result) => !_hasEmbeddedLiveData(result.stop))
         .map((result) => result.route.routeId)
         .toSet()
         .toList(growable: false);
+    if (routeIds.isEmpty) {
+      setState(() => _loadingEtas = false);
+      return;
+    }
 
     Map<String, LiveStopMap> liveMaps = const {};
     try {
@@ -144,7 +196,7 @@ class _NearbyScreenState extends State<NearbyScreen> {
       liveMaps = merged;
     }
 
-    if (!mounted) {
+    if (!mounted || requestGeneration != _requestGeneration) {
       return;
     }
     setState(() {
@@ -324,21 +376,20 @@ class _NearbyScreenState extends State<NearbyScreen> {
   Future<void> _openRoute(NearbyStopResult item) async {
     final controller = AppControllerScope.read(context);
     final routeProvider = busProviderFromString(item.route.sourceProvider);
-    final autoFavorited = await controller.recordRouteSelection(
-      provider: routeProvider,
-      routeKey: item.route.routeKey,
-      routeName: item.route.routeName,
-      source: 'nearby',
-      pathId: item.stop.pathId,
-      stopId: item.stop.stopId,
-      stopName: item.stop.stopName,
-    );
-    if (!mounted) {
-      return;
-    }
-    if (autoFavorited != null) {
-      showAutoFavoritedSnackBar(context, autoFavorited);
-    }
+    unawaited(() async {
+      final autoFavorited = await controller.recordRouteSelection(
+        provider: routeProvider,
+        routeKey: item.route.routeKey,
+        routeName: item.route.routeName,
+        source: 'nearby',
+        pathId: item.stop.pathId,
+        stopId: item.stop.stopId,
+        stopName: item.stop.stopName,
+      );
+      if (mounted && autoFavorited != null) {
+        showAutoFavoritedSnackBar(context, autoFavorited);
+      }
+    }());
     await openRouteDetailPage(
       context,
       routeKey: item.route.routeKey,
@@ -373,111 +424,133 @@ class _NearbyScreenState extends State<NearbyScreen> {
             ),
           ],
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : _error != null
-            ? Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(_error!, textAlign: TextAlign.center),
-                      const SizedBox(height: 16),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        alignment: WrapAlignment.center,
-                        children: [
-                          FilledButton(
-                            onPressed: _loadNearbyStops,
-                            child: const Text('重試'),
-                          ),
-                          OutlinedButton(
-                            onPressed: () {
-                              openAdaptiveSettingsScreen(context);
-                            },
-                            child: const Text('前往設定'),
-                          ),
-                        ],
-                      ),
-                    ],
+        body: AppContentTransition(
+          state: _loading
+              ? 'loading'
+              : _error != null
+              ? 'error'
+              : groups.isEmpty
+              ? 'empty'
+              : 'content',
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _error != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(_error!, textAlign: TextAlign.center),
+                        const SizedBox(height: 16),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          alignment: WrapAlignment.center,
+                          children: [
+                            FilledButton(
+                              onPressed: _loadNearbyStops,
+                              child: const Text('重試'),
+                            ),
+                            OutlinedButton(
+                              onPressed:
+                                  _locationFailure?.serviceDisabled == true
+                                  ? () => unawaited(
+                                      Geolocator.openLocationSettings(),
+                                    )
+                                  : _locationFailure?.deniedForever == true
+                                  ? () =>
+                                        unawaited(Geolocator.openAppSettings())
+                                  : () => openAdaptiveSettingsScreen(context),
+                              child: Text(
+                                _locationFailure?.serviceDisabled == true
+                                    ? '定位設定'
+                                    : _locationFailure?.deniedForever == true
+                                    ? '權限設定'
+                                    : '前往設定',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              )
-            : groups.isEmpty
-            ? const Center(child: Text('附近沒有找到站牌。'))
-            : Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 760),
-                  child: ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                    itemCount: groups.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final group = groups[index];
-                      return Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Container(
-                                    width: 52,
-                                    height: 52,
-                                    alignment: Alignment.center,
-                                    decoration: BoxDecoration(
-                                      color: theme.colorScheme.primaryContainer,
-                                      borderRadius: BorderRadius.circular(16),
+                )
+              : groups.isEmpty
+              ? const Center(child: Text('附近沒有找到站牌。'))
+              : Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 760),
+                    child: ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                      itemCount: groups.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final group = groups[index];
+                        return Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      width: 52,
+                                      height: 52,
+                                      alignment: Alignment.center,
+                                      decoration: BoxDecoration(
+                                        color:
+                                            theme.colorScheme.primaryContainer,
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                      child: Text(
+                                        formatDistance(group.distanceMeters),
+                                        textAlign: TextAlign.center,
+                                        style: theme.textTheme.labelMedium,
+                                      ),
                                     ),
-                                    child: Text(
-                                      formatDistance(group.distanceMeters),
-                                      textAlign: TextAlign.center,
-                                      style: theme.textTheme.labelMedium,
+                                    const SizedBox(width: 14),
+                                    Expanded(
+                                      child: Text(
+                                        group.stopName,
+                                        style: theme.textTheme.titleMedium
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 14),
-                                  Expanded(
-                                    child: Text(
-                                      group.stopName,
-                                      style: theme.textTheme.titleMedium
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
+                                  ],
+                                ),
+                                if (_loadingEtas) ...[
+                                  const SizedBox(height: 10),
+                                  const LinearProgressIndicator(minHeight: 2),
+                                ],
+                                const SizedBox(height: 8),
+                                for (
+                                  var index = 0;
+                                  index < group.routes.length;
+                                  index++
+                                ) ...[
+                                  if (index > 0) const Divider(height: 1),
+                                  _buildRouteRow(
+                                    theme,
+                                    group.routes[index],
+                                    alwaysShowSeconds:
+                                        controller.settings.alwaysShowSeconds,
                                   ),
                                 ],
-                              ),
-                              if (_loadingEtas) ...[
-                                const SizedBox(height: 10),
-                                const LinearProgressIndicator(minHeight: 2),
                               ],
-                              const SizedBox(height: 8),
-                              for (
-                                var index = 0;
-                                index < group.routes.length;
-                                index++
-                              ) ...[
-                                if (index > 0) const Divider(height: 1),
-                                _buildRouteRow(
-                                  theme,
-                                  group.routes[index],
-                                  alwaysShowSeconds:
-                                      controller.settings.alwaysShowSeconds,
-                                ),
-                              ],
-                            ],
+                            ),
                           ),
-                        ),
-                      );
-                    },
+                        );
+                      },
+                    ),
                   ),
                 ),
-              ),
+        ),
       ),
     );
   }

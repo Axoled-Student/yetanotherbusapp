@@ -15,6 +15,7 @@ import '../widgets/eta_badge.dart';
 import 'favorite_groups_screen.dart';
 import '../widgets/background_image_wrapper.dart';
 import '../widgets/cat_state_card.dart';
+import '../widgets/app_content_transition.dart';
 import 'route_detail_navigation.dart';
 
 class FavoritesScreen extends StatefulWidget {
@@ -229,31 +230,16 @@ class _FavoritesScreenState extends State<FavoritesScreen>
   }
 
   Widget _buildBottomProgressIndicator() {
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 260),
-      switchInCurve: Curves.easeOutCubic,
-      switchOutCurve: Curves.easeInCubic,
-      transitionBuilder: (child, animation) {
-        return SizeTransition(
-          sizeFactor: animation,
-          axis: Axis.horizontal,
-          child: child,
-        );
-      },
+    return AppContentTransition(
+      state: _isLoading,
       child: _isLoading
-          ? const LinearProgressIndicator(
-              key: ValueKey('favorites-loading-progress'),
-              minHeight: 4,
-            )
+          ? const LinearProgressIndicator(minHeight: 4)
           : AnimatedBuilder(
-              key: const ValueKey('favorites-countdown-progress'),
               animation: _countdownProgressController,
-              builder: (context, child) {
-                return LinearProgressIndicator(
-                  value: _countdownProgressController.value,
-                  minHeight: 4,
-                );
-              },
+              builder: (context, child) => LinearProgressIndicator(
+                value: _countdownProgressController.value,
+                minHeight: 4,
+              ),
             ),
     );
   }
@@ -665,13 +651,14 @@ class _FavoritesScreenState extends State<FavoritesScreen>
           trailing: const Icon(Icons.chevron_right_rounded),
           onTap: () async {
             unawaited(AppHaptics.selectionClick());
-            await controller.recordRouteSelection(
-              provider: favorite.provider,
-              routeKey: favorite.routeKey,
-              routeName: favorite.routeName,
-              source: 'favorite_route',
+            unawaited(
+              controller.recordRouteSelection(
+                provider: favorite.provider,
+                routeKey: favorite.routeKey,
+                routeName: favorite.routeName,
+                source: 'favorite_route',
+              ),
             );
-            if (!context.mounted) return;
             await openRouteDetailPage(
               context,
               routeKey: favorite.routeKey,
@@ -1134,20 +1121,9 @@ class _FavoritesScreenState extends State<FavoritesScreen>
     );
   }
 
-  /// Lifts the dragged card without painting the default square shadow behind
-  /// its rounded corners.
+  /// Keep the dragged card at its original size without a floating/lift effect.
   Widget _buildDragProxy(Widget child, int index, Animation<double> animation) {
-    return AnimatedBuilder(
-      animation: animation,
-      builder: (context, proxyChild) {
-        final value = Curves.easeInOut.transform(animation.value);
-        return Transform.scale(
-          scale: 1 + (0.03 * value),
-          child: Material(type: MaterialType.transparency, child: proxyChild),
-        );
-      },
-      child: child,
-    );
+    return Material(type: MaterialType.transparency, child: child);
   }
 
   void _handleReorder(
@@ -1292,22 +1268,21 @@ class _FavoritesScreenState extends State<FavoritesScreen>
               : null,
           onTap: () async {
             unawaited(AppHaptics.selectionClick());
-            final autoFavorited = await controller.recordRouteSelection(
-              provider: item.reference.provider,
-              routeKey: item.reference.routeKey,
-              routeName: item.route.routeName,
-              favorite: item.reference,
-              source: 'favorite',
-              pathId: item.reference.pathId,
-              stopId: item.reference.stopId,
-              stopName: item.reference.stopName ?? item.stop.stopName,
-            );
-            if (!context.mounted) {
-              return;
-            }
-            if (autoFavorited != null) {
-              showAutoFavoritedSnackBar(context, autoFavorited);
-            }
+            unawaited(() async {
+              final autoFavorited = await controller.recordRouteSelection(
+                provider: item.reference.provider,
+                routeKey: item.reference.routeKey,
+                routeName: item.route.routeName,
+                favorite: item.reference,
+                source: 'favorite',
+                pathId: item.reference.pathId,
+                stopId: item.reference.stopId,
+                stopName: item.reference.stopName ?? item.stop.stopName,
+              );
+              if (context.mounted && autoFavorited != null) {
+                showAutoFavoritedSnackBar(context, autoFavorited);
+              }
+            }());
             await openRouteDetailPage(
               context,
               routeKey: item.reference.routeKey,

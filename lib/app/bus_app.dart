@@ -1,13 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:palette_generator/palette_generator.dart';
 
 import '../core/announcement_models.dart';
 import '../core/announcement_push_service.dart';
 import '../core/app_controller.dart';
+import '../core/app_motion.dart';
 import '../core/auth_service.dart';
 import '../core/app_analytics.dart';
 import '../core/app_routes.dart';
@@ -28,6 +31,7 @@ import '../core/web_update_checker_stub.dart'
 import '../screens/account_screen.dart';
 import '../screens/announcement_detail_page.dart';
 import '../screens/announcements_page.dart';
+import '../screens/bus_map_screen.dart';
 import '../screens/database_settings_screen.dart';
 import '../screens/feedback_screen.dart';
 import '../screens/favorites_screen.dart';
@@ -45,10 +49,18 @@ import '../widgets/announcement_popup_dialog.dart';
 import '../widgets/database_update_dialog.dart';
 
 class BusApp extends StatelessWidget {
-  const BusApp({required this.controller, required this.analytics, super.key});
+  const BusApp({
+    required this.controller,
+    required this.analytics,
+    this.automaticSeedColor,
+    this.automaticSeedPath,
+    super.key,
+  });
 
   final AppController controller;
   final AppAnalytics analytics;
+  final Color? automaticSeedColor;
+  final String? automaticSeedPath;
 
   @override
   Widget build(BuildContext context) {
@@ -56,57 +68,64 @@ class BusApp extends StatelessWidget {
       controller: controller,
       child: DynamicColorBuilder(
         builder: (lightDynamic, darkDynamic) {
-          return AnimatedBuilder(
-            animation: controller.themeRevision,
-            builder: (context, _) {
-              return MaterialApp(
-                title: 'YetAnotherBusApp',
-                debugShowCheckedModeBanner: false,
-                themeMode: controller.settings.themeMode,
-                theme: _buildTheme(
-                  Brightness.light,
-                  settings: controller.settings,
-                  dynamicColorScheme: lightDynamic,
-                ),
-                darkTheme: _buildTheme(
-                  Brightness.dark,
-                  settings: controller.settings,
-                  dynamicColorScheme: darkDynamic,
-                ),
-                navigatorObservers: [
-                  appRouteObserver,
-                  DesktopDiscordRouteObserver(controller),
-                  if (analytics.observer != null) analytics.observer!,
-                ],
-                builder: (context, child) {
-                  final theme = Theme.of(context);
-                  final isDark = theme.brightness == Brightness.dark;
-                  return AnnotatedRegion<SystemUiOverlayStyle>(
-                    value: SystemUiOverlayStyle(
-                      statusBarColor: Colors.transparent,
-                      statusBarIconBrightness: isDark
-                          ? Brightness.light
-                          : Brightness.dark,
-                      statusBarBrightness: isDark
-                          ? Brightness.dark
-                          : Brightness.light,
-                      systemNavigationBarColor: theme.scaffoldBackgroundColor,
-                      systemNavigationBarDividerColor: Colors.transparent,
-                      systemNavigationBarIconBrightness: isDark
-                          ? Brightness.light
-                          : Brightness.dark,
-                      systemNavigationBarContrastEnforced: false,
-                    ),
-                    child: child ?? const SizedBox.shrink(),
-                  );
-                },
-                onGenerateRoute: (settings) =>
-                    _buildAppRoute(settings, controller),
-                onGenerateInitialRoutes: (initialRoute) =>
-                    _buildInitialRoutes(initialRoute, controller),
-                onUnknownRoute: (_) => _buildHomeRoute(controller),
-              );
-            },
+          return _AutomaticBackgroundColor(
+            controller: controller,
+            initialSeedColor: automaticSeedColor,
+            initialPath: automaticSeedPath,
+            builder: (automaticSeedColor) => AnimatedBuilder(
+              animation: controller.themeRevision,
+              builder: (context, _) {
+                return MaterialApp(
+                  title: 'YetAnotherBusApp',
+                  debugShowCheckedModeBanner: false,
+                  themeMode: controller.settings.themeMode,
+                  theme: _buildTheme(
+                    Brightness.light,
+                    settings: controller.settings,
+                    dynamicColorScheme: lightDynamic,
+                    automaticSeedColor: automaticSeedColor,
+                  ),
+                  darkTheme: _buildTheme(
+                    Brightness.dark,
+                    settings: controller.settings,
+                    dynamicColorScheme: darkDynamic,
+                    automaticSeedColor: automaticSeedColor,
+                  ),
+                  navigatorObservers: [
+                    appRouteObserver,
+                    DesktopDiscordRouteObserver(controller),
+                    if (analytics.observer != null) analytics.observer!,
+                  ],
+                  builder: (context, child) {
+                    final theme = Theme.of(context);
+                    final isDark = theme.brightness == Brightness.dark;
+                    return AnnotatedRegion<SystemUiOverlayStyle>(
+                      value: SystemUiOverlayStyle(
+                        statusBarColor: Colors.transparent,
+                        statusBarIconBrightness: isDark
+                            ? Brightness.light
+                            : Brightness.dark,
+                        statusBarBrightness: isDark
+                            ? Brightness.dark
+                            : Brightness.light,
+                        systemNavigationBarColor: theme.scaffoldBackgroundColor,
+                        systemNavigationBarDividerColor: Colors.transparent,
+                        systemNavigationBarIconBrightness: isDark
+                            ? Brightness.light
+                            : Brightness.dark,
+                        systemNavigationBarContrastEnforced: false,
+                      ),
+                      child: child ?? const SizedBox.shrink(),
+                    );
+                  },
+                  onGenerateRoute: (settings) =>
+                      _buildAppRoute(settings, controller),
+                  onGenerateInitialRoutes: (initialRoute) =>
+                      _buildInitialRoutes(initialRoute, controller),
+                  onUnknownRoute: (_) => _buildHomeRoute(controller),
+                );
+              },
+            ),
           );
         },
       ),
@@ -117,15 +136,18 @@ class BusApp extends StatelessWidget {
     Brightness brightness, {
     required AppSettings settings,
     ColorScheme? dynamicColorScheme,
+    Color? automaticSeedColor,
   }) {
     final useAmoled = settings.useAmoledDark && brightness == Brightness.dark;
 
-    // Color priority: manual seed override > system dynamic color > fallback seed.
-    var colorScheme = settings.seedColor != null
-        ? ColorScheme.fromSeed(
-            seedColor: settings.seedColor!,
-            brightness: brightness,
-          )
+    // Automatic color falls back to the system scheme while no image is set.
+    final seedColor = switch (settings.colorSource) {
+      AppColorSource.custom => settings.seedColor,
+      AppColorSource.automatic => automaticSeedColor,
+      AppColorSource.system => null,
+    };
+    var colorScheme = seedColor != null
+        ? ColorScheme.fromSeed(seedColor: seedColor, brightness: brightness)
         : (dynamicColorScheme ??
               ColorScheme.fromSeed(
                 seedColor: const Color(0xFF0B7285),
@@ -176,6 +198,7 @@ class BusApp extends StatelessWidget {
 
     return ThemeData(
       useMaterial3: true,
+      pageTransitionsTheme: AppMotion.pageTransitions,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: scaffoldBackground,
       appBarTheme: AppBarTheme(
@@ -221,6 +244,115 @@ class BusApp extends StatelessWidget {
       ),
     );
   }
+}
+
+String? automaticBackgroundColorPath(AppSettings settings) {
+  if (settings.colorSource != AppColorSource.automatic) {
+    return null;
+  }
+  final paths = settings.pageBackgroundImagePaths;
+  if (paths['bus']?.trim().isNotEmpty == true) {
+    return paths['bus'];
+  }
+  return paths.values.cast<String?>().firstWhere(
+    (value) => value?.trim().isNotEmpty == true,
+    orElse: () => null,
+  );
+}
+
+Future<Color?> resolveAutomaticBackgroundColor(String? path) async {
+  if (path == null) {
+    return null;
+  }
+  try {
+    final ImageProvider provider = kIsWeb
+        ? NetworkImage(path)
+        : FileImage(File(path));
+    final palette = await PaletteGenerator.fromImageProvider(
+      provider,
+      size: const Size(128, 128),
+      maximumColorCount: 10,
+    );
+    return palette.dominantColor?.color;
+  } catch (_) {
+    return null;
+  }
+}
+
+class _AutomaticBackgroundColor extends StatefulWidget {
+  const _AutomaticBackgroundColor({
+    required this.controller,
+    required this.initialSeedColor,
+    required this.initialPath,
+    required this.builder,
+  });
+
+  final AppController controller;
+  final Color? initialSeedColor;
+  final String? initialPath;
+  final Widget Function(Color? automaticSeedColor) builder;
+
+  @override
+  State<_AutomaticBackgroundColor> createState() =>
+      _AutomaticBackgroundColorState();
+}
+
+class _AutomaticBackgroundColorState extends State<_AutomaticBackgroundColor> {
+  Color? _seedColor;
+  String? _resolvedPath;
+
+  @override
+  void initState() {
+    super.initState();
+    _seedColor = widget.initialSeedColor;
+    _resolvedPath = _seedColor == null ? null : widget.initialPath;
+    widget.controller.addListener(_updateColor);
+    _updateColor();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AutomaticBackgroundColor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_updateColor);
+      widget.controller.addListener(_updateColor);
+      _seedColor = widget.initialSeedColor;
+      _resolvedPath = _seedColor == null ? null : widget.initialPath;
+      _updateColor();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_updateColor);
+    super.dispose();
+  }
+
+  void _updateColor() {
+    final path = automaticBackgroundColorPath(widget.controller.settings);
+    if (path == _resolvedPath) return;
+    _resolvedPath = path;
+    if (_seedColor != null && mounted) setState(() => _seedColor = null);
+    if (path == null) {
+      return;
+    }
+    unawaited(_extractColor(path));
+  }
+
+  Future<void> _extractColor(String path) async {
+    try {
+      final color = await resolveAutomaticBackgroundColor(path);
+      if (!mounted || _resolvedPath != path) return;
+      if (color != _seedColor) setState(() => _seedColor = color);
+    } catch (_) {
+      if (mounted && _resolvedPath == path && _seedColor != null) {
+        setState(() => _seedColor = null);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(_seedColor);
 }
 
 Route<dynamic> _buildHomeRoute(AppController controller) {
@@ -288,6 +420,11 @@ Route<dynamic>? _buildAppRoute(
         settings: const RouteSettings(name: AppRoutes.announcements),
         builder: (_) => const AnnouncementsPage(),
       );
+    case AppRouteKind.busMap:
+      return MaterialPageRoute<void>(
+        settings: RouteSettings(name: intent.location),
+        builder: (_) => BusMapScreen(initialProvider: intent.provider),
+      );
     case AppRouteKind.announcementDetail:
       final announcementId = intent.announcementId;
       if (announcementId == null || announcementId.isEmpty) {
@@ -320,10 +457,8 @@ Route<dynamic>? _buildAppRoute(
       }
       return MaterialPageRoute<void>(
         settings: RouteSettings(name: intent.location),
-        builder: (_) => StationDetailScreen(
-          provider: provider,
-          stationId: stationId,
-        ),
+        builder: (_) =>
+            StationDetailScreen(provider: provider, stationId: stationId),
       );
     case AppRouteKind.stopDetail:
     case AppRouteKind.unknown:
@@ -757,10 +892,7 @@ class _AppHomeState extends State<_AppHome> with WidgetsBindingObserver {
           return;
         }
         await navigator.pushNamed(
-          AppRoutes.stationDetailPath(
-            provider: provider,
-            stationId: stationId,
-          ),
+          AppRoutes.stationDetailPath(provider: provider, stationId: stationId),
         );
         return;
       case AppLaunchTarget.favoritesGroup:
@@ -803,11 +935,15 @@ class _AppHomeState extends State<_AppHome> with WidgetsBindingObserver {
       switch (result.outcome) {
         case AuthLinkOutcome.linked:
           messenger?.showSnackBar(
-            SnackBar(content: Text('已連結 ${_providerLabel(result.provider)} 帳號。')),
+            SnackBar(
+              content: Text('已連結 ${_providerLabel(result.provider)} 帳號。'),
+            ),
           );
         case AuthLinkOutcome.alreadyLinked:
           messenger?.showSnackBar(
-            SnackBar(content: Text('${_providerLabel(result.provider)} 已在此帳號上。')),
+            SnackBar(
+              content: Text('${_providerLabel(result.provider)} 已在此帳號上。'),
+            ),
           );
         case AuthLinkOutcome.mergeRequired:
           await _showAccountMergeDialog(result);
@@ -936,7 +1072,9 @@ class _AppHomeState extends State<_AppHome> with WidgetsBindingObserver {
               return;
             }
             messenger?.showSnackBar(
-              SnackBar(content: Text('自動更新資料庫失敗：${friendlyErrorMessage(error)}')),
+              SnackBar(
+                content: Text('自動更新資料庫失敗：${friendlyErrorMessage(error)}'),
+              ),
             );
           }
         } else if (databasePlan.shouldShowPopup) {
@@ -959,9 +1097,11 @@ class _AppHomeState extends State<_AppHome> with WidgetsBindingObserver {
               if (!mounted) {
                 return;
               }
-              ScaffoldMessenger.maybeOf(
-                context,
-              )?.showSnackBar(SnackBar(content: Text('資料庫更新失敗：${friendlyErrorMessage(error)}')));
+              ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                SnackBar(
+                  content: Text('資料庫更新失敗：${friendlyErrorMessage(error)}'),
+                ),
+              );
             }
           }
         } else if (databasePlan.shouldShowNotification) {
@@ -995,9 +1135,11 @@ class _AppHomeState extends State<_AppHome> with WidgetsBindingObserver {
                     if (!mounted) {
                       return;
                     }
-                    ScaffoldMessenger.maybeOf(
-                      context,
-                    )?.showSnackBar(SnackBar(content: Text('資料庫更新失敗：${friendlyErrorMessage(error)}')));
+                    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                      SnackBar(
+                        content: Text('資料庫更新失敗：${friendlyErrorMessage(error)}'),
+                      ),
+                    );
                   }
                 },
               ),
@@ -1011,9 +1153,7 @@ class _AppHomeState extends State<_AppHome> with WidgetsBindingObserver {
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.maybeOf(
-          context,
-        )?.showSnackBar(
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
           SnackBar(content: Text('檢查資料庫更新失敗：${friendlyErrorMessage(error)}')),
         );
       }
@@ -1055,7 +1195,8 @@ class _AppHomeState extends State<_AppHome> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return widget.controller.needsOnboarding
+    final controller = AppControllerScope.of(context);
+    return controller.needsOnboarding
         ? const OnboardingScreen()
         : const MainTransitShell();
   }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:brotli/brotli.dart' as brotli;
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 const apiAcceptedEncodings = 'br, gzip';
@@ -65,8 +66,10 @@ class TimedHttpClient extends http.BaseClient {
 }
 
 List<int> apiResponseBodyBytes(http.Response response) {
-  List<int> bytes = response.bodyBytes;
-  final encodings = _contentEncodings(response);
+  return _decodeBodyBytes(response.bodyBytes, _contentEncodings(response));
+}
+
+List<int> _decodeBodyBytes(List<int> bytes, List<String> encodings) {
   for (final encoding in encodings.reversed) {
     switch (encoding) {
       case 'br':
@@ -87,6 +90,23 @@ String apiResponseText(http.Response response) {
 
 Object? apiDecodeJsonResponse(http.Response response) {
   return jsonDecode(apiResponseText(response));
+}
+
+/// Offloads decompression, UTF-8 and JSON decoding for expensive native
+/// responses. Small plain responses avoid the cost of starting an isolate.
+/// Web uses the same decoder but remains on the browser's main thread.
+Future<Object?> apiDecodeJsonResponseAsync(http.Response response) async {
+  final encodings = _contentEncodings(response);
+  final payload = (response.bodyBytes, encodings);
+  if (!kIsWeb &&
+      (response.bodyBytes.length >= 64 * 1024 || encodings.contains('br'))) {
+    return compute(_decodeJsonPayload, payload, debugLabel: 'api.decodeJson');
+  }
+  return _decodeJsonPayload(payload);
+}
+
+Object? _decodeJsonPayload((Uint8List, List<String>) payload) {
+  return jsonDecode(utf8.decode(_decodeBodyBytes(payload.$1, payload.$2)));
 }
 
 List<String> _contentEncodings(http.Response response) {

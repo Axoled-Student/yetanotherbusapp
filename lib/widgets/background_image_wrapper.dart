@@ -131,18 +131,20 @@ class BackgroundImageWrapper extends StatelessWidget {
         // Keep opacity on the image itself so we do not add a full-screen
         // composited layer that can briefly read as a dark scrim while the
         // file image is resolving.
-        buildStoredBackgroundImage(
-          path: path,
-          fit: BoxFit.cover,
-          gaplessPlayback: isGif,
-          opacity: opacity,
-          errorBuilder: (context, error, stackTrace) =>
-              const SizedBox.shrink(),
+        RepaintBoundary(
+          child: buildStoredBackgroundImage(
+            path: path,
+            fit: BoxFit.cover,
+            gaplessPlayback: isGif,
+            opacity: opacity,
+            errorBuilder: (context, error, stackTrace) =>
+                const SizedBox.shrink(),
+          ),
         ),
         // Content on top — Cards/AppBar/BottomBar get their own
         // semi-transparent tint via overlayOpacity applied through
         // the theme in BusApp.
-        child,
+        RepaintBoundary(child: child),
       ],
     );
   }

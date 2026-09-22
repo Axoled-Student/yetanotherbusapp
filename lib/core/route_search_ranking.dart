@@ -8,14 +8,24 @@ List<RouteSummary> sortRouteSummariesForQuery(
   RouteSearchProviderPriority? providerPriority,
 }) {
   final sorted = routes.toList();
-  sorted.sort(
-    (left, right) => compareRouteSummarySearchPriority(
-      left,
-      right,
-      query: query,
-      providerPriority: providerPriority,
-    ),
-  );
+  final normalizedQuery = _normalizeRouteSearchText(query);
+  // Normalize each route once rather than allocating two ranks for every
+  // comparison (O(n log n)). Keep these caches local to this query.
+  final ranks = <RouteSummary, _RouteSearchRank>{
+    for (final route in sorted)
+      route: _RouteSearchRank.fromSummary(route, normalizedQuery),
+  };
+  final priorities = <RouteSummary, int>{
+    if (providerPriority != null)
+      for (final route in sorted)
+        route: providerPriority(busProviderFromString(route.sourceProvider)),
+  };
+  sorted.sort((left, right) {
+    final priority = (priorities[left] ?? 0).compareTo(priorities[right] ?? 0);
+    return priority != 0
+        ? priority
+        : _compareRanks(ranks[left]!, ranks[right]!);
+  });
   return sorted;
 }
 
@@ -41,6 +51,10 @@ int compareRouteSummarySearchPriority(
   final leftRank = _RouteSearchRank.fromSummary(left, normalizedQuery);
   final rightRank = _RouteSearchRank.fromSummary(right, normalizedQuery);
 
+  return _compareRanks(leftRank, rightRank);
+}
+
+int _compareRanks(_RouteSearchRank leftRank, _RouteSearchRank rightRank) {
   if (leftRank.matchTier != rightRank.matchTier) {
     return leftRank.matchTier.compareTo(rightRank.matchTier);
   }
@@ -82,12 +96,7 @@ class _RouteSearchRank {
     final routeId = _normalizeRouteSearchText(route.routeId);
     final description = _normalizeRouteSearchText(route.description);
     return _RouteSearchRank(
-      matchTier: _matchTier(
-        routeName,
-        routeId,
-        description,
-        normalizedQuery,
-      ),
+      matchTier: _matchTier(routeName, routeId, description, normalizedQuery),
       lengthGap: normalizedQuery.isEmpty
           ? 0
           : (routeName.length - normalizedQuery.length).abs(),

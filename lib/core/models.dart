@@ -44,6 +44,22 @@ enum BusProvider {
   bool get supportsLocalDatabase => this != BusProvider.inter;
 }
 
+enum AppColorSource { system, automatic, custom }
+
+AppColorSource appColorSourceFromString(
+  String? value, {
+  required bool hasSeedColor,
+}) {
+  if (value == AppColorSource.custom.name && !hasSeedColor) {
+    return AppColorSource.system;
+  }
+  return AppColorSource.values.firstWhere(
+    (source) => source.name == value,
+    // Existing settings used a null seed color for the system color scheme.
+    orElse: () => hasSeedColor ? AppColorSource.custom : AppColorSource.system,
+  );
+}
+
 List<BusProvider> downloadableBusProviders() => BusProvider.values
     .where((provider) => provider.supportsLocalDatabase)
     .toList(growable: false);
@@ -319,6 +335,7 @@ class AppSettings {
     required this.themeMode,
     required this.mobileMapProvider,
     required this.useAmoledDark,
+    required this.colorSource,
     required this.seedColor,
     required this.homeBackgroundOpacity,
     required this.pageBackgroundImagePaths,
@@ -361,6 +378,7 @@ class AppSettings {
       themeMode: ThemeMode.system,
       mobileMapProvider: MobileMapProvider.googleMaps,
       useAmoledDark: false,
+      colorSource: AppColorSource.system,
       seedColor: null,
       homeBackgroundOpacity: 0.65,
       pageBackgroundImagePaths: const {},
@@ -453,6 +471,10 @@ class AppSettings {
         json['mobileMapProvider'] as String? ?? 'googleMaps',
       ),
       useAmoledDark: json['useAmoledDark'] as bool? ?? false,
+      colorSource: appColorSourceFromString(
+        json['colorSource'] as String?,
+        hasSeedColor: _colorFromJson(json['seedColor']) != null,
+      ),
       seedColor: _colorFromJson(json['seedColor']),
       homeBackgroundOpacity:
           (json['homeBackgroundOpacity'] as num?)?.toDouble() ?? 0.65,
@@ -540,6 +562,7 @@ class AppSettings {
   final ThemeMode themeMode;
   final MobileMapProvider mobileMapProvider;
   final bool useAmoledDark;
+  final AppColorSource colorSource;
   final Color? seedColor;
   final double homeBackgroundOpacity;
   final Map<String, String> pageBackgroundImagePaths;
@@ -580,6 +603,7 @@ class AppSettings {
     ThemeMode? themeMode,
     MobileMapProvider? mobileMapProvider,
     bool? useAmoledDark,
+    AppColorSource? colorSource,
     Color? seedColor,
     bool clearSeedColor = false,
     double? homeBackgroundOpacity,
@@ -622,6 +646,7 @@ class AppSettings {
       themeMode: themeMode ?? this.themeMode,
       mobileMapProvider: mobileMapProvider ?? this.mobileMapProvider,
       useAmoledDark: useAmoledDark ?? this.useAmoledDark,
+      colorSource: colorSource ?? this.colorSource,
       seedColor: clearSeedColor ? null : (seedColor ?? this.seedColor),
       homeBackgroundOpacity:
           homeBackgroundOpacity ?? this.homeBackgroundOpacity,
@@ -688,6 +713,7 @@ class AppSettings {
       'themeMode': themeMode.name,
       'mobileMapProvider': mobileMapProvider.name,
       'useAmoledDark': useAmoledDark,
+      'colorSource': colorSource.name,
       'seedColor': _colorToJson(seedColor),
       'homeBackgroundOpacity': homeBackgroundOpacity,
       'pageBackgroundImagePaths': pageBackgroundImagePaths,
@@ -1461,6 +1487,114 @@ class RouteRealtimeBus {
   final DateTime? updatedAt;
 }
 
+/// One vehicle in a whole-city snapshot.
+///
+/// [routeId] is null when the feed could not pin the bus to a single route:
+/// some RouteUIDs cover a trunk plus its 區間 variants and nothing in a
+/// position report says which one a bus is running. The bus is still shown and
+/// still filterable; [routeUid] plus the snapshot's family entry supply the
+/// name, the line to draw, and where 路線詳情 should go.
+class CityBus {
+  const CityBus({required this.bus, required this.routeUid, this.routeId});
+
+  final RouteRealtimeBus bus;
+  final String routeUid;
+  final String? routeId;
+
+  /// Everything the map treats as "the same route".
+  String get groupKey => routeId ?? 'uid:$routeUid';
+
+  /// Identity across refreshes. Qualified by route on purpose: one plate can
+  /// appear under two routes in the same snapshot.
+  String get stateKey => '$groupKey|${bus.id}';
+}
+
+/// A route the snapshot resolved exactly.
+class CityBusRouteInfo {
+  const CityBusRouteInfo({
+    required this.routeId,
+    required this.name,
+    this.routeUid,
+  });
+
+  final String routeId;
+  final String name;
+  final String? routeUid;
+}
+
+/// A RouteUID whose buses could not be pinned to one variant.
+///
+/// [geometryRouteId] and [stopsRouteId] differ because the row that owns the
+/// shape is often a leftover with no stops and no name.
+class CityBusFamily {
+  const CityBusFamily({
+    required this.routeUid,
+    required this.name,
+    required this.routeIds,
+    this.stopsRouteId,
+    this.geometryRouteId,
+  });
+
+  final String routeUid;
+  final String name;
+  final List<String> routeIds;
+  final String? stopsRouteId;
+  final String? geometryRouteId;
+
+  /// True when the server had no readable name for any family member.
+  bool get isBareCode => name == routeUid;
+}
+
+/// Every live bus in one city at one moment.
+class CityBusSnapshot {
+  const CityBusSnapshot({
+    required this.provider,
+    required this.buses,
+    required this.routes,
+    required this.families,
+    required this.ttlSeconds,
+    this.updatedAt,
+    this.stale = false,
+    this.truncated = false,
+  });
+
+  final BusProvider provider;
+  final List<CityBus> buses;
+  final Map<String, CityBusRouteInfo> routes;
+  final Map<String, CityBusFamily> families;
+  final int ttlSeconds;
+  final DateTime? updatedAt;
+
+  /// Served from cache after the upstream failed; positions may have aged.
+  final bool stale;
+
+  /// The upstream returned suspiciously few vehicles, so some may be missing.
+  final bool truncated;
+
+  String displayNameFor(CityBus bus) {
+    final routeId = bus.routeId;
+    if (routeId != null) {
+      return routes[routeId]?.name ?? routeId;
+    }
+    return families[bus.routeUid]?.name ?? bus.routeUid;
+  }
+
+  /// The route to open in 路線詳情 and load stops from, if there is one.
+  String? detailRouteIdFor(CityBus bus) =>
+      bus.routeId ?? families[bus.routeUid]?.stopsRouteId;
+
+  /// The route to draw the line from, which may be a stop-less shape row.
+  String? geometryRouteIdFor(CityBus bus) =>
+      bus.routeId ?? families[bus.routeUid]?.geometryRouteId;
+
+  /// True when this bus is only known at family level.
+  bool isAmbiguous(CityBus bus) => bus.routeId == null;
+
+  /// How many buses share a route with [bus] in this snapshot.
+  int siblingCountFor(CityBus bus) =>
+      buses.where((other) => other.groupKey == bus.groupKey).length;
+}
+
 class BusStatusDescriptor {
   const BusStatusDescriptor({
     required this.code,
@@ -1673,18 +1807,37 @@ class StopInfo {
   }
 }
 
+enum RouteDetailPhase { stops, realtime, family }
+
+/// A progressively loaded route. Only the stops phase is waiting for the
+/// selected route's realtime request; supplementary family failures are local.
+class RouteDetailUpdate {
+  const RouteDetailUpdate({
+    required this.detail,
+    required this.phase,
+    this.familyUnavailable = false,
+  });
+
+  final RouteDetailData detail;
+  final RouteDetailPhase phase;
+  final bool familyUnavailable;
+  bool get isLoadingLive => phase == RouteDetailPhase.stops;
+}
+
 class RouteDetailData {
   const RouteDetailData({
     required this.route,
     required this.paths,
     required this.stopsByPath,
     required this.hasLiveData,
+    this.familyRouteIds = const [],
   });
 
   final RouteSummary route;
   final List<PathInfo> paths;
   final Map<int, List<StopInfo>> stopsByPath;
   final bool hasLiveData;
+  final List<String> familyRouteIds;
 }
 
 class StopRouteSearchResult {

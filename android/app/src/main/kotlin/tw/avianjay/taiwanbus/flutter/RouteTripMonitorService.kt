@@ -11,8 +11,6 @@ import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.drawable.Icon
 import android.location.Location
-import android.media.AudioAttributes
-import android.media.RingtoneManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -103,19 +101,25 @@ class RouteTripMonitorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         notificationManager = NotificationManagerCompat.from(this)
-        createNotificationChannels()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Fulfil the foreground-service deadline before parsing the route,
+        // reading preferences, initializing Play Services or building OEM extras.
+        // A queued start can reach this instance after a stop, so do this for
+        // every start command, not just in onCreate().
+        if (intent?.action == ACTION_START_OR_UPDATE || intent?.action == null) {
+            if (!ensureForegroundStarted()) {
+                stopTracking()
+                return START_NOT_STICKY
+            }
+        }
         if (intent == null || intent.action == null) {
-            // Sticky restart after process death — the session is gone. Attempt
-            // the (crash-proofed) foreground promotion in case this restart
-            // still carries a startForeground obligation, then exit.
-            startFallbackForegroundAndStop()
+            // A sticky restart has no persisted session to restore.
+            stopTracking()
             return START_NOT_STICKY
         }
 
@@ -220,7 +224,7 @@ class RouteTripMonitorService : Service() {
                 val sessionJson = intent.getStringExtra(EXTRA_SESSION_JSON)
                 val parsedSession = sessionJson?.let(::parseSessionJson)
                 if (parsedSession == null) {
-                    startFallbackForegroundAndStop()
+                    stopTracking()
                     return START_NOT_STICKY
                 }
 
@@ -230,7 +234,7 @@ class RouteTripMonitorService : Service() {
                 if (AppRuntimeStateStore.isTripMonitorPausedFor(this, parsedSession)) {
                     session = parsedSession
                     appInForeground = parsedSession.appInForeground
-                    startFallbackForegroundAndStop()
+                    stopTracking()
                     return START_NOT_STICKY
                 }
                 session = parsedSession
@@ -271,10 +275,7 @@ class RouteTripMonitorService : Service() {
                 }
                 latestLocation = createSessionLocation(parsedSession) ?: latestLocation
 
-                if (!ensureForegroundStarted(parsedSession)) {
-                    stopTracking()
-                    return START_NOT_STICKY
-                }
+                createAlertNotificationChannel()
                 requestLocationUpdates()
                 refreshNotification(force = true)
                 if (appInForeground) {
@@ -287,26 +288,12 @@ class RouteTripMonitorService : Service() {
         return START_STICKY
     }
 
-    private fun startFallbackForegroundAndStop() {
-        // Only promote to foreground when this instance still owes a
-        // startForeground() call (started via startForegroundService or a
-        // sticky restart of a previous foreground instance). The promotion can
-        // fail on newer Android versions when the app is not eligible anymore
-        // (e.g. while-in-use location permission from background), so never let
-        // it crash the process — stopping the service also lifts the
-        // startForeground obligation.
-        if (!foregroundStarted) {
-            runCatching {
-                startForegroundInternal(buildStoppedNotification())
-            }
-        }
-        stopTracking()
-    }
-
     override fun onDestroy() {
         mainHandler.removeCallbacksAndMessages(null)
         runCatching {
-            fusedLocationClient.removeLocationUpdates(locationCallback)
+            if (::fusedLocationClient.isInitialized) {
+                fusedLocationClient.removeLocationUpdates(locationCallback)
+            }
         }
         ioExecutor.shutdownNow()
         super.onDestroy()
@@ -357,15 +344,24 @@ class RouteTripMonitorService : Service() {
         }
     }
 
-    private fun ensureForegroundStarted(session: TrackingSession): Boolean {
-        val initialNotification = buildTrackingNotification(buildStartupSnapshot(session))
+    private fun ensureForegroundStarted(): Boolean {
         if (foregroundStarted) {
-            runCatching {
-                notificationManager.notify(TRACKING_NOTIFICATION_ID, initialNotification)
-            }
             return true
         }
-        return startForegroundInternal(initialNotification)
+        return runCatching {
+            createTrackingNotificationChannel()
+            val notification = NotificationCompat.Builder(this, TRACKING_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_status_bus)
+                .setContentTitle("YABus")
+                .setContentText("正在啟動乘車提醒…")
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
+                .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+                .build()
+            startForegroundInternal(notification)
+        }.getOrDefault(false)
     }
 
     private fun startForegroundInternal(notification: Notification): Boolean {
@@ -395,6 +391,9 @@ class RouteTripMonitorService : Service() {
     private fun requestLocationUpdates() {
         if (session?.backgroundLocationAlwaysGranted != true) {
             return
+        }
+        if (!::fusedLocationClient.isInitialized) {
+            fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         }
         val request = LocationRequest.Builder(
             Priority.PRIORITY_HIGH_ACCURACY,
@@ -456,6 +455,14 @@ class RouteTripMonitorService : Service() {
             ioExecutor.execute {
                 try {
                     runCatching {
+                        if (force) {
+                            // Rich notifications (including OEM integrations) are
+                            // built off the main thread, after foreground promotion.
+                            notificationManager.notify(
+                                TRACKING_NOTIFICATION_ID,
+                                buildTrackingNotification(buildStartupSnapshot(currentSession)),
+                            )
+                        }
                         val trackingSnapshot = buildSnapshot(
                             currentSession,
                             latestLocation ?: createSessionLocation(currentSession),
@@ -2184,20 +2191,12 @@ class RouteTripMonitorService : Service() {
         )
     }
 
-    private fun createNotificationChannels() {
+    private fun createTrackingNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return
         }
 
         val manager = getSystemService(NotificationManager::class.java)
-        manager.deleteNotificationChannel(LEGACY_TRACKING_CHANNEL_ID)
-        val defaultNotificationSound =
-            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        val defaultAudioAttributes =
-            AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
         manager.createNotificationChannel(
             NotificationChannel(
                 TRACKING_CHANNEL_ID,
@@ -2207,6 +2206,14 @@ class RouteTripMonitorService : Service() {
                 description = "在背景持續追蹤目前路線與下車提醒。"
             },
         )
+    }
+
+    private fun createAlertNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return
+        }
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.deleteNotificationChannel(LEGACY_TRACKING_CHANNEL_ID)
         manager.createNotificationChannel(
             NotificationChannel(
                 ALERT_CHANNEL_ID,
@@ -2292,6 +2299,9 @@ class RouteTripMonitorService : Service() {
     }
 
     private fun stopTracking(cancelAlertNotification: Boolean = true) {
+        // Release any pending start obligation before doing cleanup that may
+        // involve other processes (location and notification services).
+        stopSelf()
         foregroundStarted = false
         session = null
         latestLocation = null
@@ -2328,7 +2338,9 @@ class RouteTripMonitorService : Service() {
         cachedLiveStops = emptyMap()
         mainHandler.removeCallbacksAndMessages(null)
         runCatching {
-            fusedLocationClient.removeLocationUpdates(locationCallback)
+            if (::fusedLocationClient.isInitialized) {
+                fusedLocationClient.removeLocationUpdates(locationCallback)
+            }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -2340,7 +2352,6 @@ class RouteTripMonitorService : Service() {
         if (cancelAlertNotification) {
             notificationManager.cancel(ALERT_NOTIFICATION_ID)
         }
-        stopSelf()
     }
 
     private fun fetchLiveStopMap(session: TrackingSession): Map<Int, LiveStopState> {

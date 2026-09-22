@@ -341,30 +341,35 @@ class SmartRouteService {
     int limit = 3,
   }) async {
     final topProfiles = chooseTopProfilesForTime(profiles, now, limit: limit);
-    final suggestions = <SmartRouteSuggestion>[];
-    for (final profile in topProfiles) {
-      final detail = await repository.getCompleteBusInfo(
-        profile.routeKey,
-        provider: profile.provider,
-      );
-      final favorite = chooseFavoriteForRoute(
-        routeProfile: profile,
-        favoriteProfiles: favoriteProfiles,
-        favorites: favorites,
-        now: now,
-      );
-      suggestions.add(
-        buildSuggestion(
-          profile: profile,
-          score: scoreProfileForTime(profile, now),
-          reason: buildReason(profile, now),
-          detail: detail,
-          favorite: favorite,
-          position: position,
-        ),
-      );
-    }
-    return suggestions;
+    final suggestions = await Future.wait(
+      topProfiles.map((profile) async {
+        try {
+          final detail = await repository.getCompleteBusInfo(
+            profile.routeKey,
+            provider: profile.provider,
+          );
+          final favorite = chooseFavoriteForRoute(
+            routeProfile: profile,
+            favoriteProfiles: favoriteProfiles,
+            favorites: favorites,
+            now: now,
+          );
+          return buildSuggestion(
+            profile: profile,
+            score: scoreProfileForTime(profile, now),
+            reason: buildReason(profile, now),
+            detail: detail,
+            favorite: favorite,
+            position: position,
+          );
+        } catch (_) {
+          return null;
+        }
+      }),
+    );
+    return suggestions.whereType<SmartRouteSuggestion>().toList(
+      growable: false,
+    );
   }
 
   static StopInfo? _findStopInDetail(

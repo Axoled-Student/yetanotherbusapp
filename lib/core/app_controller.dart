@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -73,7 +74,7 @@ class AppController extends ChangeNotifier {
 
   static const defaultFavoriteGroupName = '收藏';
   static const autoFavoriteGroupName = '常用';
-  static const _autoFavoriteStopVisitThreshold = 5;
+  static const _autoFavoriteStopVisitThreshold = 3;
   static const Duration _accountSyncDebounce = Duration(seconds: 3);
   static const Duration _foregroundAccountSyncCooldown = Duration(minutes: 1);
 
@@ -224,6 +225,10 @@ class AppController extends ChangeNotifier {
   String? get announcementsError => _announcementsError;
   String? get accountSyncError => _accountSyncError;
   bool get accountSyncEnabled => _accountSyncLocalState.syncEnabled == true;
+  bool get routeHistorySyncEnabled =>
+      _accountSyncLocalState.routeHistorySyncEnabled;
+  bool get routeHistoryDeletionPending =>
+      _accountSyncLocalState.routeHistoryDeletionPending;
   bool get shouldPromptToEnableAccountSync =>
       isAuthenticated && _accountSyncLocalState.syncEnabled == null;
   DateTime? get settingsLastModifiedAt =>
@@ -253,6 +258,15 @@ class AppController extends ChangeNotifier {
 
   bool isDatabaseReady(BusProvider provider) {
     return _databaseReadyByProvider[provider] ?? false;
+  }
+
+  Future<Set<String>> routeNamesForDownloadedProviders() async {
+    final routeNames = await Future.wait(
+      downloadedProviders.map(
+        (provider) => repository.routeNames(provider: provider),
+      ),
+    );
+    return routeNames.expand((names) => names).toSet();
   }
 
   Future<bool> isRouteMetadataDatabaseReady() {
@@ -343,7 +357,8 @@ class AppController extends ChangeNotifier {
     );
     await _validatePersistedAuthSession();
 
-    if (accountSyncEnabled) {
+    if (accountSyncEnabled ||
+        _accountSyncLocalState.routeHistoryDeletionPending) {
       scheduleForegroundAccountSync(force: true);
     }
   }
@@ -390,7 +405,8 @@ class AppController extends ChangeNotifier {
           } catch (_) {
             _authAccount = null;
           }
-          if (accountSyncEnabled) {
+          if (accountSyncEnabled ||
+              _accountSyncLocalState.routeHistoryDeletionPending) {
             scheduleForegroundAccountSync(force: true);
           }
         } else {
@@ -429,7 +445,8 @@ class AppController extends ChangeNotifier {
     } catch (_) {
       _authAccount = null;
     }
-    if (accountSyncEnabled) {
+    if (accountSyncEnabled ||
+        _accountSyncLocalState.routeHistoryDeletionPending) {
       scheduleForegroundAccountSync(force: true);
     }
     notifyListeners();
@@ -547,6 +564,7 @@ class AppController extends ChangeNotifier {
     notifyListeners();
     try {
       await authService.logout();
+      await _restoreDeviceLocalRouteHistory();
       _authSession = null;
       _authAccount = null;
       _cancelScheduledAccountSync();
@@ -562,6 +580,7 @@ class AppController extends ChangeNotifier {
   /// there is no point in calling the server logout endpoint.
   Future<void> _forceLocalLogout() async {
     await authService.logout();
+    await _restoreDeviceLocalRouteHistory();
     _authSession = null;
     _authAccount = null;
     _cancelScheduledAccountSync();
@@ -627,6 +646,20 @@ class AppController extends ChangeNotifier {
     _accountSyncError = null;
   }
 
+  Future<void> _restoreDeviceLocalRouteHistory() async {
+    final payload = _accountSyncLocalState.routeHistoryDevicePayload;
+    if (payload == null) {
+      return;
+    }
+    _history = _historyFromRouteHistoryDevice(
+      payload,
+    ).take(_settings.maxHistory).toList(growable: false);
+    _routeUsageProfiles = _profilesFromRouteHistoryDevice(payload)
+      ..sort(_compareRouteUsageProfiles);
+    await storage.saveHistory(_history);
+    await storage.saveRouteUsageProfiles(_routeUsageProfiles);
+  }
+
   Future<void> setAccountSyncEnabled(
     bool enabled, {
     bool syncNow = true,
@@ -638,6 +671,10 @@ class AppController extends ChangeNotifier {
     notifyListeners();
     if (!enabled) {
       _cancelScheduledAccountSync();
+      if (_accountSyncLocalState.routeHistoryDeletionPending &&
+          isAuthenticated) {
+        _scheduleAccountSync(delay: Duration.zero);
+      }
       return;
     }
     if (syncNow) {
@@ -647,8 +684,51 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  Future<void> setRouteHistorySyncEnabled(bool enabled) async {
+    if (isAuthenticated && (_authSession?.deviceId.trim().isEmpty ?? true)) {
+      throw StateError('這個登入工作階段缺少裝置識別碼，無法更新路線紀錄同步。');
+    }
+    _cancelScheduledAccountSync();
+    final nowMs = math.max(
+      DateTime.now().millisecondsSinceEpoch,
+      (_accountSyncLocalState.routeHistoryModifiedAtMs ?? 0) + 1,
+    );
+    _accountSyncLocalState = _accountSyncLocalState.copyWith(
+      routeHistorySyncEnabled: enabled,
+      routeHistoryDeletionPending: !enabled && isAuthenticated,
+      routeHistoryModifiedAtMs: nowMs,
+      routeHistoryDevicePayload:
+          enabled && _accountSyncLocalState.routeHistoryDevicePayload == null
+          ? _buildRouteHistoryDevicePayload(
+              history: _history,
+              profiles: _routeUsageProfiles,
+              modifiedAtMs: nowMs,
+            )
+          : _accountSyncLocalState.routeHistoryDevicePayload,
+    );
+    await _saveAccountSyncLocalState();
+    notifyListeners();
+    try {
+      if (enabled && accountSyncEnabled && isAuthenticated) {
+        await syncAllAccountData();
+      } else if (!enabled && isAuthenticated) {
+        await _runAccountSyncOperation(() async {
+          await _refreshAccountSyncStatusCore();
+          await _syncPreferencesPreservingRemoteRouteHistory();
+        });
+      }
+    } catch (_) {
+      if (!enabled && isAuthenticated) {
+        _scheduleAccountSync(delay: _accountSyncDebounce);
+      }
+      rethrow;
+    }
+  }
+
   void scheduleForegroundAccountSync({bool force = false}) {
-    if (!accountSyncEnabled || !isAuthenticated) {
+    if ((!accountSyncEnabled &&
+            !_accountSyncLocalState.routeHistoryDeletionPending) ||
+        !isAuthenticated) {
       return;
     }
     final nowMs = DateTime.now().millisecondsSinceEpoch;
@@ -683,7 +763,9 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _runScheduledAccountSync() async {
-    if (!accountSyncEnabled || !isAuthenticated) {
+    if ((!accountSyncEnabled &&
+            !_accountSyncLocalState.routeHistoryDeletionPending) ||
+        !isAuthenticated) {
       return;
     }
     if (_accountSyncBusy) {
@@ -691,10 +773,21 @@ class AppController extends ChangeNotifier {
       return;
     }
     try {
-      await syncAllAccountData();
+      if (_accountSyncLocalState.routeHistoryDeletionPending) {
+        await _runAccountSyncOperation(() async {
+          await _refreshAccountSyncStatusCore();
+          await _syncPreferencesPreservingRemoteRouteHistory();
+        });
+      } else {
+        await syncAllAccountData();
+      }
     } catch (_) {
       // Keep the last sync error on the controller, but avoid interrupting
       // the user with an automatic-sync exception.
+      if (_accountSyncLocalState.routeHistoryDeletionPending &&
+          isAuthenticated) {
+        _scheduleAccountSync(delay: const Duration(seconds: 30));
+      }
     }
   }
 
@@ -707,7 +800,9 @@ class AppController extends ChangeNotifier {
       serverDocument: _accountSyncSummary?.documents[namespace],
       localModifiedAt: switch (namespace) {
         AccountSyncNamespace.favorites => favoriteGroupsLastModifiedAt,
-        AccountSyncNamespace.preferences => settingsLastModifiedAt,
+        AccountSyncNamespace.preferences => _dateTimeFromMs(
+          _localModifiedAtMsForNamespace(namespace),
+        ),
       },
     );
   }
@@ -819,16 +914,41 @@ class AppController extends ChangeNotifier {
       return;
     }
     if (!status.hasCloudData || status.localChanges || !status.hasEverSynced) {
-      await _syncAccountNamespaceCore(
-        namespace,
-        conflictPolicy: AccountSyncConflictPolicy.clientWins,
-      );
+      await _syncPreferencesPreservingRemoteRouteHistory();
     }
+  }
+
+  Future<void> _syncPreferencesPreservingRemoteRouteHistory() async {
+    const namespace = AccountSyncNamespace.preferences;
+    AccountSyncDocument? latestServerDocument;
+    AccountSyncConflictException? latestConflict;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        await _syncAccountNamespaceCore(
+          namespace,
+          conflictPolicy: AccountSyncConflictPolicy.abort,
+          baseDocument: latestServerDocument,
+        );
+        return;
+      } on AccountSyncConflictException catch (conflict) {
+        latestConflict = conflict;
+        latestServerDocument = conflict.serverDocument;
+        if (latestServerDocument == null) {
+          rethrow;
+        }
+        _accountSyncSummary =
+            (_accountSyncSummary ??
+                    const AccountSyncSummary(serverTime: null, documents: {}))
+                .copyWithDocument(latestServerDocument);
+      }
+    }
+    throw latestConflict!;
   }
 
   Future<void> _syncAccountNamespaceCore(
     AccountSyncNamespace namespace, {
     required AccountSyncConflictPolicy conflictPolicy,
+    AccountSyncDocument? baseDocument,
   }) async {
     final session = _authSession;
     if (session == null || !session.isAuthenticated) {
@@ -839,19 +959,29 @@ class AppController extends ChangeNotifier {
     final localModifiedAtMs =
         _localModifiedAtMsForNamespace(namespace) ??
         DateTime.now().millisecondsSinceEpoch;
+    final routeHistoryModifiedAtMsAtStart =
+        namespace == AccountSyncNamespace.preferences
+        ? _accountSyncLocalState.routeHistoryModifiedAtMs
+        : null;
     final result = await accountSyncService.upsertDocument(
       namespace: namespace,
       payload: _buildSyncPayload(namespace),
       clientModifiedAt: DateTime.fromMillisecondsSinceEpoch(localModifiedAtMs),
       schemaVersion: namespace.schemaVersion,
       conflictPolicy: conflictPolicy,
-      baseRevision: localState.lastSyncedServerRevision,
-      baseEtag: localState.lastSyncedServerEtag,
+      baseRevision:
+          baseDocument?.revision ?? localState.lastSyncedServerRevision,
+      baseEtag: baseDocument?.etag ?? localState.lastSyncedServerEtag,
     );
 
     final document = result.document;
     if (document != null) {
-      await _applyRemoteDocument(namespace, document);
+      await _applyRemoteDocument(
+        namespace,
+        document,
+        syncedLocalModifiedAtMs: localModifiedAtMs,
+        routeHistoryModifiedAtMsAtRequest: routeHistoryModifiedAtMsAtStart,
+      );
       return;
     }
 
@@ -876,8 +1006,10 @@ class AppController extends ChangeNotifier {
 
   Future<void> _applyRemoteDocument(
     AccountSyncNamespace namespace,
-    AccountSyncDocument document,
-  ) async {
+    AccountSyncDocument document, {
+    int? syncedLocalModifiedAtMs,
+    int? routeHistoryModifiedAtMsAtRequest,
+  }) async {
     final updatedAtMs =
         document.updatedAt?.millisecondsSinceEpoch ??
         DateTime.now().millisecondsSinceEpoch;
@@ -898,8 +1030,37 @@ class AppController extends ChangeNotifier {
         await _syncWearOsSnapshot(requestRefresh: false);
       case AccountSyncNamespace.preferences:
         _settings = _settingsFromSyncPayload(document.payload);
-        await _persistSettings(modifiedAtMs: updatedAtMs, scheduleSync: false);
+        await _persistSettings(
+          modifiedAtMs: syncedLocalModifiedAtMs ?? updatedAtMs,
+          scheduleSync: false,
+        );
+        if (routeHistorySyncEnabled) {
+          final currentRouteHistoryModifiedAtMs =
+              _accountSyncLocalState.routeHistoryModifiedAtMs;
+          final hasNewerRouteHistory =
+              syncedLocalModifiedAtMs != null &&
+              currentRouteHistoryModifiedAtMs != null &&
+              currentRouteHistoryModifiedAtMs >
+                  (routeHistoryModifiedAtMsAtRequest ?? 0);
+          await _applyRouteHistorySyncPayload(
+            document.payload,
+            ownDevicePayloadOverride: hasNewerRouteHistory
+                ? _accountSyncLocalState.routeHistoryDevicePayload
+                : null,
+          );
+          if (hasNewerRouteHistory) {
+            _scheduleChangeDrivenAccountSync();
+          }
+        }
         await _applySettingsSideEffects();
+    }
+
+    if (namespace == AccountSyncNamespace.preferences &&
+        syncedLocalModifiedAtMs != null &&
+        !routeHistorySyncEnabled) {
+      _accountSyncLocalState = _accountSyncLocalState.copyWith(
+        routeHistoryDeletionPending: false,
+      );
     }
 
     final previous = _accountSyncLocalState.stateFor(namespace);
@@ -909,7 +1070,7 @@ class AppController extends ChangeNotifier {
         lastSuccessfulSyncAtMs:
             document.lastSyncedAt?.millisecondsSinceEpoch ??
             DateTime.now().millisecondsSinceEpoch,
-        lastSyncedLocalModifiedAtMs: updatedAtMs,
+        lastSyncedLocalModifiedAtMs: syncedLocalModifiedAtMs ?? updatedAtMs,
         lastSyncedServerRevision: document.revision,
         lastSyncedServerEtag: document.etag,
         lastSyncedServerUpdatedAt: document.updatedAt
@@ -1609,12 +1770,30 @@ class AppController extends ChangeNotifier {
 
   Future<void> updateSeedColor(Color? color) async {
     if (color != null) {
-      _settings = _settings.copyWith(seedColor: color);
+      _settings = _settings.copyWith(
+        colorSource: AppColorSource.custom,
+        seedColor: color,
+      );
     } else {
-      _settings = _settings.copyWith(clearSeedColor: true);
+      _settings = _settings.copyWith(
+        colorSource: AppColorSource.system,
+        clearSeedColor: true,
+      );
     }
     await _persistSettings();
     await analytics.logSeedColorChanged(usesCustomColor: color != null);
+    notifyListeners();
+  }
+
+  Future<void> updateColorSource(AppColorSource source) async {
+    _settings = _settings.copyWith(
+      colorSource: source,
+      clearSeedColor: source != AppColorSource.custom,
+    );
+    await _persistSettings();
+    await analytics.logSeedColorChanged(
+      usesCustomColor: source == AppColorSource.custom,
+    );
     notifyListeners();
   }
 
@@ -2180,7 +2359,33 @@ class AppController extends ChangeNotifier {
     return repository.searchRoutesFromApi(query, provider: provider);
   }
 
+  Stream<RouteDetailUpdate> watchRouteDetail(
+    int routeKey, {
+    BusProvider? provider,
+    String? routeIdHint,
+    String? routeNameHint,
+  }) => repository.watchRouteDetail(
+    routeKey,
+    provider: provider ?? _settings.provider,
+    routeIdHint: routeIdHint,
+    routeNameHint: routeNameHint,
+  );
+
   Future<RouteDetailData> getRouteDetail(
+    int routeKey, {
+    BusProvider? provider,
+    String? routeIdHint,
+    String? routeNameHint,
+  }) {
+    return repository.getCompleteRouteFamilyBusInfo(
+      routeKey,
+      provider: provider ?? _settings.provider,
+      routeIdHint: routeIdHint,
+      routeNameHint: routeNameHint,
+    );
+  }
+
+  Future<RouteDetailData> getPrimaryRouteDetail(
     int routeKey, {
     BusProvider? provider,
     String? routeIdHint,
@@ -2192,6 +2397,27 @@ class AppController extends ChangeNotifier {
       routeIdHint: routeIdHint,
       routeNameHint: routeNameHint,
     );
+  }
+
+  Future<RouteDetailData> getRouteTopology(
+    int routeKey, {
+    BusProvider? provider,
+    String? routeIdHint,
+    String? routeNameHint,
+  }) {
+    return repository.getRouteTopology(
+      routeKey,
+      provider: provider ?? _settings.provider,
+      routeIdHint: routeIdHint,
+      routeNameHint: routeNameHint,
+    );
+  }
+
+  Future<RouteDetailData> enrichRouteWithFamily(
+    RouteDetailData selected, {
+    required BusProvider provider,
+  }) {
+    return repository.enrichRouteWithFamily(selected, provider: provider);
   }
 
   Future<List<StopInfo>> getStopsByRoute(
@@ -2290,6 +2516,25 @@ class AppController extends ChangeNotifier {
     );
   }
 
+  Future<List<NearbyStopResult>> completeNearbyStopGroups({
+    required double latitude,
+    required double longitude,
+    required List<NearbyStopResult> seedResults,
+    BusProvider? provider,
+    double radiusMeters = 500,
+  }) async {
+    final targetProvider =
+        provider ??
+        nearestBusProvider(latitude: latitude, longitude: longitude);
+    return repository.completeNearbyStopGroups(
+      provider: targetProvider,
+      latitude: latitude,
+      longitude: longitude,
+      seedResults: seedResults,
+      radiusMeters: radiusMeters,
+    );
+  }
+
   Future<void> addHistoryEntry(
     RouteSummary route, {
     required BusProvider provider,
@@ -2315,12 +2560,14 @@ class AppController extends ChangeNotifier {
     );
     _history = _history.take(_settings.maxHistory).toList();
     await storage.saveHistory(_history);
+    await _recordSyncedHistoryEntry(_history.first);
     notifyListeners();
   }
 
   Future<void> clearHistory() async {
     _history = [];
     await storage.saveHistory(_history);
+    await _updateRouteHistoryDevicePayload(history: const []);
     notifyListeners();
   }
 
@@ -2329,6 +2576,7 @@ class AppController extends ChangeNotifier {
     _favoriteUsageProfiles = const [];
     _stopVisitProfiles = const [];
     await _persistSmartRouteProfiles();
+    await _updateRouteHistoryDevicePayload(profiles: const []);
   }
 
   Future<void> clearRouteSelectionHistory() async {
@@ -2341,6 +2589,10 @@ class AppController extends ChangeNotifier {
     _favoriteUsageProfiles = const [];
     _stopVisitProfiles = const [];
     await _persistSmartRouteProfiles();
+    final deviceProfiles = _profilesFromRouteHistoryDevice(
+      _accountSyncLocalState.routeHistoryDevicePayload,
+    ).map((profile) => profile.clearSelections()).toList(growable: false);
+    await _updateRouteHistoryDevicePayload(profiles: deviceProfiles);
   }
 
   Future<FavoriteStop?> recordRouteSelection({
@@ -2366,9 +2618,7 @@ class AppController extends ChangeNotifier {
         routeName: routeName.trim(),
         totalOpens: 0,
         lastOpenedAtMs: 0,
-        totalSelections: 1,
-        lastSelectedAtMs: timestamp.millisecondsSinceEpoch,
-        hourlySelections: <int, int>{timestamp.hour: 1},
+        selectionTimestampsMs: <int>[timestamp.millisecondsSinceEpoch],
       ),
     );
     final selectedFavorite =
@@ -2398,6 +2648,13 @@ class AppController extends ChangeNotifier {
     }
 
     await _persistSmartRouteProfiles();
+    await _recordSyncedRouteUsage(
+      provider: provider,
+      routeKey: routeKey,
+      routeName: routeName,
+      timestamp: timestamp,
+      selection: true,
+    );
     await analytics.logRouteSelected(
       provider: provider,
       routeKey: routeKey,
@@ -2515,6 +2772,13 @@ class AppController extends ChangeNotifier {
       ),
     );
     await _persistSmartRouteProfiles();
+    await _recordSyncedRouteUsage(
+      provider: provider,
+      routeKey: route.routeKey,
+      routeName: route.routeName,
+      timestamp: timestamp,
+      selection: false,
+    );
     await analytics.logRouteVisit(provider: provider, routeKey: route.routeKey);
   }
 
@@ -2523,11 +2787,12 @@ class AppController extends ChangeNotifier {
     required int routeKey,
     required RouteUsageProfile Function(RouteUsageProfile profile) record,
     required RouteUsageProfile Function() create,
+    List<RouteUsageProfile>? source,
   }) {
     final next = <RouteUsageProfile>[];
     var found = false;
 
-    for (final profile in _routeUsageProfiles) {
+    for (final profile in source ?? _routeUsageProfiles) {
       if (profile.provider == provider && profile.routeKey == routeKey) {
         next.add(record(profile));
         found = true;
@@ -3050,7 +3315,10 @@ class AppController extends ChangeNotifier {
   int? _localModifiedAtMsForNamespace(AccountSyncNamespace namespace) {
     return switch (namespace) {
       AccountSyncNamespace.favorites => _favoriteGroupsLastModifiedAtMs,
-      AccountSyncNamespace.preferences => _settingsLastModifiedAtMs,
+      AccountSyncNamespace.preferences => _latestModifiedAtMs(
+        _settingsLastModifiedAtMs,
+        _accountSyncLocalState.routeHistoryModifiedAtMs,
+      ),
     };
   }
 
@@ -3067,11 +3335,263 @@ class AppController extends ChangeNotifier {
           ),
         ),
       },
-      AccountSyncNamespace.preferences => _mergeJsonMaps(
-        _accountSyncLocalState.preferences.preservedPayload ?? const {},
-        _preferencesSyncPayloadFromSettings(_settings),
-      ),
+      AccountSyncNamespace.preferences => _buildPreferencesSyncPayload(),
     };
+  }
+
+  Map<String, dynamic> _buildPreferencesSyncPayload() {
+    final payload = _mergeJsonMaps(
+      _accountSyncLocalState.preferences.preservedPayload ?? const {},
+      _preferencesSyncPayloadFromSettings(_settings),
+    );
+    final deviceId = _authSession?.deviceId.trim() ?? '';
+    if (deviceId.isEmpty) {
+      if (routeHistorySyncEnabled ||
+          _accountSyncLocalState.routeHistoryDeletionPending) {
+        throw StateError('登入工作階段缺少裝置識別碼，無法同步路線紀錄。');
+      }
+      return payload;
+    }
+    final source =
+        _accountSyncSummary
+            ?.documents[AccountSyncNamespace.preferences]
+            ?.payload ??
+        _accountSyncLocalState.preferences.preservedPayload;
+    final routeHistory = _stringMap(source?['routeHistory']);
+    if (routeHistory != null && routeHistory['version'] != 1) {
+      throw StateError('雲端路線紀錄版本較新，請更新 App 後再同步。');
+    }
+    final devices = _stringMap(routeHistory?['devices']) ?? <String, dynamic>{};
+    if (routeHistorySyncEnabled) {
+      devices[deviceId] =
+          _accountSyncLocalState.routeHistoryDevicePayload ??
+          _buildRouteHistoryDevicePayload(
+            history: _history,
+            profiles: _routeUsageProfiles,
+          );
+    } else {
+      devices.remove(deviceId);
+    }
+    if (devices.isEmpty) {
+      payload.remove('routeHistory');
+    } else {
+      payload['routeHistory'] = {'version': 1, 'devices': devices};
+    }
+    return payload;
+  }
+
+  Map<String, dynamic> _buildRouteHistoryDevicePayload({
+    required List<SearchHistoryEntry> history,
+    required List<RouteUsageProfile> profiles,
+    int? modifiedAtMs,
+  }) {
+    return {
+      'modifiedAtMs': modifiedAtMs ?? DateTime.now().millisecondsSinceEpoch,
+      'history': history.map((entry) => entry.toJson()).toList(growable: false),
+      'routeUsageProfiles': profiles
+          .map((profile) => profile.toJson())
+          .toList(growable: false),
+    };
+  }
+
+  List<SearchHistoryEntry> _historyFromRouteHistoryDevice(Object? value) {
+    final payload = _stringMap(value);
+    final raw = payload?['history'];
+    if (raw is! List) return const [];
+    final entries = <SearchHistoryEntry>[];
+    for (final item in raw.whereType<Map>().take(200)) {
+      try {
+        final entry = SearchHistoryEntry.fromJson(
+          item.map((key, value) => MapEntry(key.toString(), value)),
+        );
+        if (entry.routeKey > 0 && entry.timestampMs > 0) {
+          entries.add(entry);
+        }
+      } catch (_) {
+        // Ignore one malformed device entry without discarding valid history.
+      }
+    }
+    return entries;
+  }
+
+  List<RouteUsageProfile> _profilesFromRouteHistoryDevice(Object? value) {
+    final payload = _stringMap(value);
+    final raw = payload?['routeUsageProfiles'];
+    if (raw is! List) return const [];
+    final profiles = <RouteUsageProfile>[];
+    for (final item in raw.whereType<Map>().take(1000)) {
+      try {
+        final profile = RouteUsageProfile.fromJson(
+          item.map((key, value) => MapEntry(key.toString(), value)),
+        );
+        if (profile.routeKey > 0) {
+          profiles.add(profile);
+        }
+      } catch (_) {
+        // Skip malformed profiles independently from the preferences document.
+      }
+    }
+    return profiles;
+  }
+
+  Future<void> _recordSyncedHistoryEntry(SearchHistoryEntry entry) async {
+    if (!_tracksDeviceRouteHistory) return;
+    final history =
+        _historyFromRouteHistoryDevice(
+              _accountSyncLocalState.routeHistoryDevicePayload,
+            )
+            .where(
+              (item) =>
+                  item.provider != entry.provider ||
+                  item.routeKey != entry.routeKey,
+            )
+            .toList();
+    history.insert(0, entry);
+    await _updateRouteHistoryDevicePayload(
+      history: history.take(_settings.maxHistory).toList(growable: false),
+    );
+  }
+
+  Future<void> _recordSyncedRouteUsage({
+    required BusProvider provider,
+    required int routeKey,
+    required String routeName,
+    required DateTime timestamp,
+    required bool selection,
+  }) async {
+    if (!_tracksDeviceRouteHistory) return;
+    final current = _profilesFromRouteHistoryDevice(
+      _accountSyncLocalState.routeHistoryDevicePayload,
+    );
+    final next = _buildUpdatedRouteUsageProfiles(
+      provider: provider,
+      routeKey: routeKey,
+      record: (profile) => selection
+          ? profile.recordSelection(timestamp, routeName: routeName)
+          : profile.recordOpen(timestamp, routeName: routeName),
+      create: () => RouteUsageProfile(
+        provider: provider,
+        routeKey: routeKey,
+        routeName: routeName.trim(),
+        totalOpens: selection ? 0 : 1,
+        lastOpenedAtMs: selection ? 0 : timestamp.millisecondsSinceEpoch,
+        hourlyOpens: selection ? const {} : {timestamp.hour: 1},
+        selectionTimestampsMs: selection
+            ? [timestamp.millisecondsSinceEpoch]
+            : const [],
+      ),
+      source: current,
+    );
+    await _updateRouteHistoryDevicePayload(profiles: next);
+  }
+
+  Future<void> _updateRouteHistoryDevicePayload({
+    List<SearchHistoryEntry>? history,
+    List<RouteUsageProfile>? profiles,
+  }) async {
+    if (!_tracksDeviceRouteHistory) return;
+    final current = _accountSyncLocalState.routeHistoryDevicePayload;
+    final nowMs = math.max(
+      DateTime.now().millisecondsSinceEpoch,
+      (_accountSyncLocalState.routeHistoryModifiedAtMs ?? 0) + 1,
+    );
+    _accountSyncLocalState = _accountSyncLocalState.copyWith(
+      routeHistoryModifiedAtMs: nowMs,
+      routeHistoryDevicePayload: _buildRouteHistoryDevicePayload(
+        history: history ?? _historyFromRouteHistoryDevice(current),
+        profiles: profiles ?? _profilesFromRouteHistoryDevice(current),
+        modifiedAtMs: nowMs,
+      ),
+    );
+    await _saveAccountSyncLocalState();
+    if (routeHistorySyncEnabled) {
+      _scheduleChangeDrivenAccountSync();
+    }
+  }
+
+  bool get _tracksDeviceRouteHistory =>
+      isAuthenticated &&
+      (routeHistorySyncEnabled ||
+          _accountSyncLocalState.routeHistoryDevicePayload != null);
+
+  Future<void> _applyRouteHistorySyncPayload(
+    Map<String, dynamic>? payload, {
+    Map<String, dynamic>? ownDevicePayloadOverride,
+  }) async {
+    final routeHistory = _stringMap(payload?['routeHistory']);
+    if (routeHistory?['version'] != 1) return;
+    final devices = _stringMap(routeHistory?['devices']);
+    if (devices == null) return;
+
+    final deviceId = _authSession?.deviceId.trim() ?? '';
+    if (deviceId.isNotEmpty && ownDevicePayloadOverride != null) {
+      devices[deviceId] = ownDevicePayloadOverride;
+    }
+    if (devices.isEmpty) return;
+
+    final historyByRoute = <String, SearchHistoryEntry>{};
+    final profileParts = <String, List<RouteUsageProfile>>{};
+    for (final devicePayload in devices.values) {
+      for (final entry in _historyFromRouteHistoryDevice(devicePayload)) {
+        final key = '${entry.provider.name}:${entry.routeKey}';
+        final existing = historyByRoute[key];
+        if (existing == null || entry.timestampMs > existing.timestampMs) {
+          historyByRoute[key] = entry;
+        }
+      }
+      for (final profile in _profilesFromRouteHistoryDevice(devicePayload)) {
+        final key = '${profile.provider.name}:${profile.routeKey}';
+        (profileParts[key] ??= []).add(profile);
+      }
+    }
+
+    final ownPayload = _stringMap(devices[deviceId]);
+    if (ownPayload != null) {
+      _accountSyncLocalState = _accountSyncLocalState.copyWith(
+        routeHistoryDevicePayload: ownPayload,
+      );
+    }
+
+    _history = historyByRoute.values.toList()
+      ..sort((left, right) => right.timestampMs.compareTo(left.timestampMs));
+    _history = _history.take(_settings.maxHistory).toList(growable: false);
+    _routeUsageProfiles =
+        profileParts.values
+            .map(_mergeRouteUsageProfiles)
+            .toList(growable: false)
+          ..sort(_compareRouteUsageProfiles);
+    await storage.saveHistory(_history);
+    await storage.saveRouteUsageProfiles(_routeUsageProfiles);
+  }
+
+  RouteUsageProfile _mergeRouteUsageProfiles(List<RouteUsageProfile> profiles) {
+    final first = profiles.first;
+    var routeName = first.routeName;
+    var totalOpens = 0;
+    var lastOpenedAtMs = 0;
+    final hourlyOpens = <int, int>{};
+    final selections = <int>[];
+    for (final profile in profiles) {
+      totalOpens += profile.totalOpens;
+      if (profile.lastOpenedAtMs >= lastOpenedAtMs) {
+        lastOpenedAtMs = profile.lastOpenedAtMs;
+        if (profile.routeName.trim().isNotEmpty) routeName = profile.routeName;
+      }
+      profile.hourlyOpens.forEach((hour, count) {
+        hourlyOpens[hour] = (hourlyOpens[hour] ?? 0) + count;
+      });
+      selections.addAll(profile.selectionTimestampsWithin());
+    }
+    selections.sort();
+    return RouteUsageProfile(
+      provider: first.provider,
+      routeKey: first.routeKey,
+      routeName: routeName,
+      totalOpens: totalOpens,
+      lastOpenedAtMs: lastOpenedAtMs,
+      hourlyOpens: hourlyOpens,
+      selectionTimestampsMs: selections,
+    );
   }
 
   AppSettings _settingsFromSyncPayload(Map<String, dynamic>? payload) {
@@ -3081,6 +3601,7 @@ class AppController extends ChangeNotifier {
     if (appearance != null) {
       _copyKnownKey(appearance, merged, 'themeMode');
       _copyKnownKey(appearance, merged, 'useAmoledDark');
+      _copyKnownKey(appearance, merged, 'colorSource');
       _copyKnownKey(appearance, merged, 'seedColor');
       _copyKnownKey(appearance, merged, 'homeBackgroundOpacity');
       _copyKnownKey(appearance, merged, 'overlayOpacity');
@@ -3212,6 +3733,7 @@ class _ThemeSettings {
   const _ThemeSettings({
     required this.themeMode,
     required this.useAmoledDark,
+    required this.colorSource,
     required this.seedColor,
     required this.overlayOpacity,
     required this.backgroundImagePaths,
@@ -3221,6 +3743,7 @@ class _ThemeSettings {
     return _ThemeSettings(
       themeMode: settings.themeMode,
       useAmoledDark: settings.useAmoledDark,
+      colorSource: settings.colorSource,
       seedColor: settings.seedColor,
       overlayOpacity: settings.overlayOpacity,
       backgroundImagePaths: Map<String, String>.unmodifiable(
@@ -3231,6 +3754,7 @@ class _ThemeSettings {
 
   final ThemeMode themeMode;
   final bool useAmoledDark;
+  final AppColorSource colorSource;
   final Color? seedColor;
   final double overlayOpacity;
   final Map<String, String> backgroundImagePaths;
@@ -3240,6 +3764,7 @@ class _ThemeSettings {
     return other is _ThemeSettings &&
         other.themeMode == themeMode &&
         other.useAmoledDark == useAmoledDark &&
+        other.colorSource == colorSource &&
         other.seedColor == seedColor &&
         other.overlayOpacity == overlayOpacity &&
         mapEquals(other.backgroundImagePaths, backgroundImagePaths);
@@ -3249,6 +3774,7 @@ class _ThemeSettings {
   int get hashCode => Object.hash(
     themeMode,
     useAmoledDark,
+    colorSource,
     seedColor,
     overlayOpacity,
     Object.hashAll(
@@ -3350,6 +3876,7 @@ Map<String, dynamic> _preferencesSyncPayloadFromSettings(AppSettings settings) {
     'appearance': {
       'themeMode': json['themeMode'],
       'useAmoledDark': json['useAmoledDark'],
+      'colorSource': json['colorSource'],
       'seedColor': json['seedColor'],
       'homeBackgroundOpacity': json['homeBackgroundOpacity'],
       'overlayOpacity': json['overlayOpacity'],
@@ -3436,6 +3963,12 @@ DateTime? _dateTimeFromMs(int? value) {
     return null;
   }
   return DateTime.fromMillisecondsSinceEpoch(value);
+}
+
+int? _latestModifiedAtMs(int? left, int? right) {
+  if (left == null) return right;
+  if (right == null) return left;
+  return math.max(left, right);
 }
 
 Object? _deepCloneJson(Object? value) {
